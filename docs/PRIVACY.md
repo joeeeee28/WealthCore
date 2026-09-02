@@ -22,6 +22,7 @@ WealthCore handles extremely sensitive financial information. This document desc
 
 - Server logs contain **no** financial data or tokens. Only a bind message is printed.
 - `audit_log` records actions (e.g. `account.create`, `networth.snapshot`) but not sensitive values.
+- Provider webhook receipts are audited as `aa.webhook` with only the event `type`, consent/session id and status — the **raw notification payload (which may contain masked account refs) is never stored or logged**, and the webhook idempotency table stores identifiers only.
 
 ## URLs and errors
 
@@ -70,3 +71,5 @@ WealthCore handles extremely sensitive financial information. This document desc
 
 ## External providers
 - AA/FIU (optional, credential-gated), market data (optional, key-gated), LLM (optional, key-gated). Each is **not configured** unless credentials are provided; nothing is sent to WealthCore servers (there are none).
+- Account linking happens only through the legitimate **AA/FIP consent flow**: WealthCore never asks for a bank password, internet-banking password, UPI PIN, ATM PIN, CVV, OTP, debit/credit card PIN, or any AA credential. The customer reviews and approves a consent on the provider's screen; WealthCore stores only the consent reference and the returned (often masked) financial data.
+- The Setu consent webview URL is stored on the consent row so it can be re-opened while pending; it is a session-scoped link, not a credential, and it is never placed in audit logs or error output.

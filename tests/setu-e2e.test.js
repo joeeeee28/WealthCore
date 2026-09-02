@@ -109,7 +109,7 @@ before(async () => {
   // so wipe existing data before setup to honour the single-user constraint.
   const { getDb } = await import('../server/db.js');
   const db = getDb();
-  db.exec(`DELETE FROM aa_sessions; DELETE FROM sync_runs; DELETE FROM consents; DELETE FROM transactions; DELETE FROM holdings; DELETE FROM securities; DELETE FROM budgets; DELETE FROM goals; DELETE FROM notifications; DELETE FROM reconciliation_runs; DELETE FROM reconciliation_items; DELETE FROM accounts; DELETE FROM categories; DELETE FROM users;`);
+  db.exec(`DELETE FROM webhook_notifications; DELETE FROM aa_sessions; DELETE FROM sync_runs; DELETE FROM consents; DELETE FROM transactions; DELETE FROM holdings; DELETE FROM securities; DELETE FROM budgets; DELETE FROM goals; DELETE FROM notifications; DELETE FROM reconciliation_runs; DELETE FROM reconciliation_items; DELETE FROM accounts; DELETE FROM categories; DELETE FROM users;`);
 
   const setup = await fetch(base + '/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Setu E2E', email: 'setu@wealthcore.local', password: 'wealthcore-setu' }) }).then((r) => r.json());
   token = setup.token;
@@ -168,14 +168,36 @@ test('full Setu sandbox flow: connect-setu → sync → accounts/transactions pe
   assert.equal(dash.json.demoCount, 1); // labelled demo/sandbox
 });
 
-test('Setu webhook updates consent state', async () => {
-  const body = { consentId: 'sim-consent-1', status: 'REVOKED' };
+test('Consent revocation via a REAL-format Setu webhook updates consent state', async () => {
+  // Setu's current AA consent notification contract: status under data.status.
+  const body = {
+    type: 'CONSENT_STATUS_UPDATE',
+    timestamp: new Date().toISOString(),
+    success: true,
+    consentId: 'sim-consent-1',
+    notificationId: 'sim-notif-revoke-1',
+    data: { status: 'REVOKED', detail: {} },
+  };
   const res = await fetch(base + '/aa/webhook/setu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal(res.status, 200);
   const j = await res.json();
   assert.equal(j.ok, true);
+
   // Consent row should now be revoked.
   const consents = await req('GET', '/aa/consents');
   const row = consents.json.find((c) => c.external_ref === 'sim-consent-1');
   assert.equal(row.status, 'revoked');
+
+  // Idempotency: replaying the same notification id must not error or mutate.
+  const replay = await fetch(base + '/aa/webhook/setu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal(replay.status, 200);
+  const rj = await replay.json();
+  assert.equal(rj.ok, true);
+  assert.equal(rj.idempotent, true);
+
+  // The notification is recorded exactly once.
+  const { getDb } = await import('../server/db.js');
+  const db = getDb();
+  const seen = db.prepare("SELECT COUNT(*) c FROM webhook_notifications WHERE provider='setu' AND notification_id='sim-notif-revoke-1'").get();
+  assert.equal(seen.c, 1);
 });

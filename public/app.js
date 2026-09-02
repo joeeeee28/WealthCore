@@ -837,6 +837,11 @@ function statusChipConsent(s) {
 function consentRow(c) {
   const fi = (c.fi_types ? JSON.parse(c.fi_types) : [c.fi_type]).filter(Boolean).join(' · ');
   const actions = [];
+  // A real provider (e.g. Setu) returns a consent webview URL; surface it so the
+  // customer can open the provider UI to approve a REAL consent (never auto-approve).
+  if (c.status === 'pending' && c.consent_url) {
+    actions.push(`<button class="btn primary sm" data-open-consent="${c.id}" data-url="${esc(c.consent_url)}">Open consent</button>`);
+  }
   if (c.status === 'pending') actions.push(`<button class="btn ghost sm" data-approve-consent="${c.id}">Approve</button>`);
   if (c.status === 'approved' || c.status === 'active') {
     actions.push(`<button class="btn primary sm" data-sync-consent="${c.id}">Sync data</button>`);
@@ -849,6 +854,10 @@ function consentRow(c) {
 
 function wireIntegr(data) {
   document.querySelectorAll('[data-action="connect-aa"]').forEach((b) => b.addEventListener('click', openAAConnect));
+  document.querySelectorAll('[data-open-consent]').forEach((b) => b.addEventListener('click', () => {
+    window.open(b.dataset.url, '_blank', 'noopener');
+    toast('Opened provider consent screen — approve it there, then refresh', 'info');
+  }));
   document.querySelectorAll('[data-approve-consent]').forEach((b) => b.addEventListener('click', async () => { await api(`/aa/consent/${b.dataset.approveConsent}/approve`, { method: 'POST', body: {} }); toast('Consent approved', 'success'); render(); }));
   document.querySelectorAll('[data-revoke-consent]').forEach((b) => b.addEventListener('click', async () => { await api(`/aa/consent/${b.dataset.revokeConsent}/revoke`, { method: 'POST', body: {} }); toast('Consent revoked', 'success'); render(); }));
   document.querySelectorAll('[data-sync-consent]').forEach((b) => b.addEventListener('click', async () => {
@@ -878,8 +887,16 @@ async function openAAConnect() {
     e.preventDefault(); const fd = new FormData(e.target);
     try {
       const body = { provider: fd.get('provider'), fiType: fd.get('fiType'), purpose: fd.get('purpose'), customerHandle: fd.get('customerHandle') || undefined };
-      await api('/aa/connect', { method: 'POST', body });
-      closeModal(); toast('Consent created — approve it to sync data', 'success'); render();
+      const { data } = await api('/aa/connect', { method: 'POST', body });
+      closeModal(); render();
+      // A real provider (e.g. Setu sandbox) returns a consent webview URL. The
+      // customer MUST open it to approve the real consent — never auto-approve.
+      if (data.consentUrl) {
+        toast('Consent created. Open the provider screen to approve it (manual user action).', 'info');
+        window.open(data.consentUrl, '_blank', 'noopener');
+      } else {
+        toast('Consent created — approve it to sync data', 'success');
+      }
     } catch (err) { toast(err.message, 'error'); }
   });
 }

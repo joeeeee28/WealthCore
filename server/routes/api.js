@@ -251,6 +251,12 @@ router.post('/auth/unlock', (req, res) => {
 });
 
 // ---- Provider webhook (public — Setu calls this; signature-verified) ----
+// Setu's current AA notifications post a payload shaped as:
+//   Consent status: { type:"CONSENT_STATUS_UPDATE", consentId, notificationId,
+//                     data:{ status:"ACTIVE|REJECTED|REVOKED|PAUSED|EXPIRED", detail } }
+//   Session status: { type:"SESSION_STATUS_UPDATE", consentId, dataSessionId,
+//                     data:{ status:"PENDING|PARTIAL|COMPLETED|EXPIRED|FAILED", fips, format } }
+// The status is therefore under `payload.data.status`, NOT a top-level field.
 router.post('/aa/webhook/setu', async (req, res) => {
   const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
   const signature = req.get('x-webhook-signature') || req.get('x-setu-signature') || '';
@@ -258,20 +264,62 @@ router.post('/aa/webhook/setu', async (req, res) => {
   const payload = req.body || {};
   try {
     await prov.handleNotification({ rawBody, headers: { 'x-webhook-signature': signature }, payload });
+
+    const type = String(payload.type || payload.event || '').toUpperCase();
     const consentRef = payload.consentId || payload.consent_id || (payload.data && payload.data.consentId) || null;
+    const dataSessionId = payload.dataSessionId || payload.data_session_id || null;
+    // Real Setu notifications carry status under data.status; tolerate the old
+    // top-level `status` field for backward compatibility with earlier tests.
+    const status = String((payload.data && payload.data.status) || payload.status || '').toUpperCase();
+    const notificationId = payload.notificationId || payload.notification_id || null;
+
+    // Idempotency: a notification is processed at most once per (provider, id).
+    if (notificationId) {
+      const seen = db.prepare('SELECT id FROM webhook_notifications WHERE provider=? AND notification_id=?').get('setu', notificationId);
+      if (seen) return res.status(200).json({ ok: true, idempotent: true });
+    }
+
+    // Consent status-update notification → update the canonical consent state.
     if (consentRef) {
       const row = db.prepare("SELECT id FROM consents WHERE external_ref=? AND provider='setu'").get(consentRef);
       if (row) {
-        const status = String(payload.status || '').toUpperCase();
         const mapped = status === 'ACTIVE' || status === 'APPROVED' ? 'approved'
           : status === 'REJECTED' ? 'rejected'
           : status === 'REVOKED' ? 'revoked'
-          : status === 'EXPIRED' ? 'expired' : null;
+          : status === 'EXPIRED' ? 'expired'
+          : status === 'PAUSED' ? 'paused' : null;
         if (mapped) {
           db.prepare(`UPDATE consents SET status=?, updated_at=datetime('now') WHERE id=?`).run(mapped, row.id);
         }
       }
     }
+
+    // Session status-update notification → reflect the data-session lifecycle.
+    if (dataSessionId) {
+      const sess = db.prepare("SELECT id FROM aa_sessions WHERE session_id=? AND provider='setu'").get(dataSessionId);
+      if (sess) {
+        const sessionStatus = status === 'COMPLETED' ? 'ready'
+          : status === 'PARTIAL' ? 'partial'
+          : status === 'PENDING' ? 'data_requested'
+          : status === 'EXPIRED' ? 'expired'
+          : status === 'FAILED' ? 'failed' : null;
+        if (sessionStatus) {
+          const readyAt = (status === 'COMPLETED' || status === 'PARTIAL') ? new Date().toISOString() : null;
+          db.prepare(`UPDATE aa_sessions SET status=?, ready_at=COALESCE(?, ready_at), fetched_at=COALESCE(
+            CASE WHEN ? IN ('COMPLETED','PARTIAL') THEN datetime('now') END, fetched_at), error=CASE WHEN ? IN ('EXPIRED','FAILED') THEN COALESCE(error, ?) ELSE error END
+            WHERE id=?`)
+            .run(sessionStatus, readyAt, status, status, `setu session ${status.toLowerCase()}`, sess.id);
+        }
+      }
+    }
+
+    // Persist the notification id for idempotency/audit (no raw payload).
+    if (notificationId) {
+      db.prepare(`INSERT INTO webhook_notifications (provider, notification_id, type, consent_id, data_session_id, status) VALUES ('setu', ?, ?, ?, ?, ?)`)
+        .run(notificationId, type || (dataSessionId ? 'SESSION_STATUS_UPDATE' : 'CONSENT_STATUS_UPDATE'), consentRef, dataSessionId, status || null);
+    }
+
+    audit(null, 'aa.webhook', `type=${type || 'unknown'} consent=${consentRef || '-'} session=${dataSessionId || '-'} status=${status || '-'}`, req.ip);
     res.status(200).json({ ok: true });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.code || 'WEBHOOK_REJECTED' });
@@ -748,9 +796,10 @@ router.post('/aa/connect', requireUnlocked, async (req, res) => {
     const created = await prov.createConsent({ provider: prov.name, fiType, fiTypes, purpose, dataRange, frequency, customerHandle });
     const consent = created.consent || created;
     const expiresAt = new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString();
+    const consentUrl = consent.redirectUrl || consent.consentUrl || consent.url || null;
     const info = db.prepare(`
-      INSERT INTO consents (user_id, provider, fi_type, purpose, status, expires_at, external_ref, fi_types, data_range_from, data_range_to, frequency, customer_handle, consent_handle, data_status)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, 'idle')
+      INSERT INTO consents (user_id, provider, fi_type, purpose, status, expires_at, external_ref, fi_types, data_range_from, data_range_to, frequency, customer_handle, consent_handle, data_status, consent_url)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)
     `).run(req.user.id, prov.name, fiType || (fiTypes || []).join(','), purpose, expiresAt,
       consent.consentId || consent.id || null,
       JSON.stringify(consent.fiTypes || fiTypes || [fiType]),
@@ -758,9 +807,11 @@ router.post('/aa/connect', requireUnlocked, async (req, res) => {
       consent.dataRange?.to || dataRange?.to || null,
       JSON.stringify(consent.frequency || frequency || { unit: 'MONTH', value: 1 }),
       consent.customerHandle || customerHandle || null,
-      consent.consentHandle || consent.handle || null);
+      consent.consentHandle || consent.handle || null,
+      consentUrl);
     audit(req.user.id, 'aa.connect', `${prov.name}: ${fiType || (fiTypes || []).join(',')}`);
-    res.json({ consent: db.prepare('SELECT * FROM consents WHERE id=?').get(info.lastInsertRowid), provider: prov.name, mode: typeof prov.mode === 'function' ? prov.mode() : prov.mode });
+    const row = db.prepare('SELECT * FROM consents WHERE id=?').get(info.lastInsertRowid);
+    res.json({ consent: row, provider: prov.name, mode: typeof prov.mode === 'function' ? prov.mode() : prov.mode, consentUrl });
   } catch (e) {
     return err(res, 400, e.code === 'PROVIDER_NOT_CONFIGURED' ? 'PROVIDER_NOT_CONFIGURED' : 'AA_ERROR', e.message);
   }
@@ -805,9 +856,10 @@ router.post('/aa/connect-setu', requireUnlocked, async (req, res) => {
     const created = await prov.createConsent({ fiType, fiTypes, purpose, dataRange, frequency, customerHandle });
     const consent = created.consent || created;
     const expiresAt = consent.expiresAt || new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString();
+    const consentUrl = consent.redirectUrl || consent.consentUrl || consent.url || null;
     const info = db.prepare(`
-      INSERT INTO consents (user_id, provider, fi_type, purpose, status, expires_at, external_ref, fi_types, data_range_from, data_range_to, frequency, customer_handle, consent_handle, data_status)
-      VALUES (?, 'setu', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, 'idle')
+      INSERT INTO consents (user_id, provider, fi_type, purpose, status, expires_at, external_ref, fi_types, data_range_from, data_range_to, frequency, customer_handle, consent_handle, data_status, consent_url)
+      VALUES (?, 'setu', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)
     `).run(req.user.id, fiType || (fiTypes || []).join(','), consent.purpose || purpose, expiresAt,
       consent.consentId || consent.id || null,
       JSON.stringify(consent.fiTypes || fiTypes || [fiType]),
@@ -815,9 +867,10 @@ router.post('/aa/connect-setu', requireUnlocked, async (req, res) => {
       consent.dataRange?.to || dataRange?.to || null,
       JSON.stringify(consent.frequency || frequency || { unit: 'MONTH', value: 1 }),
       consent.customerHandle || customerHandle || null,
-      consent.consentHandle || consent.consentId || consent.id || null);
+      consent.consentHandle || consent.consentId || consent.id || null,
+      consentUrl);
     audit(req.user.id, 'aa.connect_setu', fiType);
-    res.json({ consent: db.prepare('SELECT * FROM consents WHERE id=?').get(info.lastInsertRowid), provider: 'setu', redirectUrl: consent.redirectUrl || consent.consentUrl || null });
+    res.json({ consent: db.prepare('SELECT * FROM consents WHERE id=?').get(info.lastInsertRowid), provider: 'setu', redirectUrl: consentUrl, consentUrl });
   } catch (e) {
     return err(res, 400, e.code === 'PROVIDER_NOT_CONFIGURED' ? 'PROVIDER_NOT_CONFIGURED' : 'AA_ERROR', e.message);
   }

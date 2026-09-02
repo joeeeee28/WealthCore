@@ -66,3 +66,30 @@ test('unpriced security is flagged, not faked as live', () => {
   assert.equal(p.holdings[0].priceMissing, true);
   assert.equal(p.holdings[0].priceStatus, 'MANUAL');
 });
+
+test('mixed currencies are surfaced separately (no silent FX mixing)', () => {
+  const { db, userId, acct } = setup();
+  acct('INR Savings', 'savings', 5000000, false); // ₹50,000
+  // Insert a USD-denominated account directly (the setup helper hard-codes INR).
+  db.prepare(`INSERT INTO accounts (user_id, name, type, currency, balance_minor, is_liability, source) VALUES (?,?,'current','USD',?,?,'manual')`)
+    .run(userId, 'USD Cash', 6050000, 0); // $60,500 — NOT converted to INR
+  acct('INR Loan', 'loan', 2000000, true); // ₹20,000
+
+  const nw = computeNetWorth(db, userId);
+  assert.equal(nw.mixedCurrency, true);
+  assert.equal(nw.baseCurrency, 'INR');
+
+  // INR-only row: assets ₹50,000, liabilities ₹20,000.
+  const inr = nw.currencyBreakdown.find((c) => c.currency === 'INR');
+  assert.ok(inr);
+  assert.equal(inr.assetsMinor, 5000000);
+  assert.equal(inr.liabilitiesMinor, 2000000);
+  assert.equal(inr.netWorthMinor, 3000000);
+
+  // USD row is isolated so a USD minor is never treated as an INR minor.
+  const usd = nw.currencyBreakdown.find((c) => c.currency === 'USD');
+  assert.ok(usd);
+  assert.equal(usd.assetsMinor, 6050000);
+  assert.equal(usd.liabilitiesMinor, 0);
+  assert.equal(usd.netWorthMinor, 6050000);
+});

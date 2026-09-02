@@ -68,7 +68,18 @@ AA responses are delivered encrypted. WealthCore stores the key material only in
 
 ## Webhook handling
 
-A data-ready notification would arrive as an inbound callback (`/api/v1/aa/webhook`). Because no provider is configured in this build, no webhook endpoint is exposed in the default set to avoid a false impression of liveness. When a provider is added, a verified inline handler should be implemented and documented here.
+Provider callbacks arrive at the public (non-user-auth, by design) endpoint
+`POST /api/v1/aa/webhook/setu`. The handler:
+- validates the (optional) signature when `WEALTHCORE_SETU_WEBHOOK_SECRET` is configured;
+- reads the status from **`payload.data.status`** (Setu's real notification contract) and
+  the event type (`CONSENT_STATUS_UPDATE` / `SESSION_STATUS_UPDATE`) plus `consentId` /
+  `dataSessionId` / `notificationId`;
+- is **idempotent**: a notification id is persisted in `webhook_notifications` (unique on
+  provider + id) and a replay is acknowledged + ignored;
+- reflects the change on the matching `consents`/`aa_sessions` rows (ACTIVE/REJECTED/
+  REVOKED/PAUSED/EXPIRED; COMPLETED/PARTIAL/PENDING/EXPIRED/FAILED);
+- audits each receipt (`aa.webhook`) with the event type/ids/status only — **never the raw
+  payload** (which may contain masked account references).
 
 ## Errors & retries
 
@@ -110,10 +121,14 @@ simulator. Live connectivity requires `WEALTHCORE_SETU_TOKEN` +
 `WEALTHCORE_SETU_PRODUCT_INSTANCE_ID`; production is `PLANNED`. See
 `docs/SETU_INTEGRATION.md`.
 
-### v1.3.1 — Setu auth model updated to current official (client credentials)
-Setu now authenticates via `x-client-id` + `x-client-secret` + `x-product-instance-id`
-(Setu Bridge client credentials), not the earlier bearer token. The adapter and the
-local simulator assert these headers. A credential-gated external test
-(`npm run test:setu:sandbox`) hits the real sandbox and reports
-`BLOCKED — Setu credentials/access not available` when creds are absent.
-See `docs/SETU_INTEGRATION.md`.
+### v1.3.1 / v1.4.x — Setu auth model updated to current official (Bearer via getToken)
+Setu authenticates with `Authorization: Bearer <access_token>` + `x-product-instance-id`.
+The access token is acquired from Bridge client credentials
+(`WEALTHCORE_SETU_CLIENT_ID` / `_CLIENT_SECRET`) via the Setu Auth Mechanism / getToken
+(`server/aa/providers/setu-auth.js`); the client secret is **never** sent as an AA request
+header. The adapter and the local simulator assert this model. A credential-gated external
+test (`npm run test:setu:sandbox`) hits the real sandbox and reports
+`BLOCKED — Setu credentials/access not available` when creds are absent. v1.4.x also added
+webhook idempotency + real-notification-contract handling, persistence of the Setu consent
+URL (`consents.consent_url`) and a per-currency net-worth breakdown. See
+`docs/SETU_INTEGRATION.md`.

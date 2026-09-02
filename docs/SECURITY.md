@@ -43,10 +43,17 @@ A security review of the WealthCore build. Scope: authentication, authorization,
 
 Responses set `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN`, `Cache-Control: no-store`.
 
+## Provider webhooks (Setu AA)
+
+- `/api/v1/aa/webhook/setu` is **public** (Setu calls it) but is not user-auth gated by design — provider callbacks must not require a user session. It is still **not** exposed unauthenticated for arbitrary replay: every notification is validated, deduplicated by `notification_id`, and recorded in `audit_log`.
+- **Signature verification is best-effort/optional** because Setu's current AA Notifications doc does not publish a signature header/algorithm. When `WEALTHCORE_SETU_WEBHOOK_SECRET` is configured, `verifySetuWebhookSignature` validates an HMAC-SHA256 `X-Webhook-Signature`; otherwise it reports `NO_SECRET_CONFIGURED`. This is documented as defence-in-depth, not a hard security gate on a provider whose contract omits it. **Signature validation is not disabled when a secret IS configured.**
+- **Idempotency**: notifications stored in `webhook_notifications` (unique on `provider` + `notification_id`); a replayed notification id is acknowledged and ignored, so a setu replay cannot re-apply a state transition twice. Event `type`, `consentId`, `dataSessionId` and `status` are recorded; **no raw FI payload is stored or logged**.
+- A rejected/invalid signature returns `400`.
+
 ## Logging
 
 - Server logs only the bind message; **no financial data, tokens, or user content are logged**.
-- `audit_log` stores actions (not sensitive values) for the user's own review.
+- `audit_log` stores actions (not sensitive values) for the user's own review. Webhook receipts are audited as `aa.webhook` with only `type`/`consent`/`session`/`status` — never the payload body.
 
 ## Database protection
 

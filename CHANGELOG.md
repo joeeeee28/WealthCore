@@ -73,3 +73,19 @@
 - Re-verified NO Setu credentials present in the environment: /aa/providers and /config honestly report setu configured=false / READY_FOR_CONFIGURATION.
 - `npm run test:setu:sandbox` reports BLOCKED — Real Setu sandbox credentials/access are not available (test skips).
 - No fabricated connectivity; local simulator E2E remains the credential-free contract proof. Docs recorded.
+
+## v1.4.0 — Setu Authentication Manager + correct current official Bearer auth model
+- Corrected Setu auth to the current official model: Bridge client_id + client_secret are used to ACQUIRE an access token (Setu Auth Mechanism / getToken); all AA APIs use `Authorization: Bearer <token>` + `x-product-instance-id`. The client secret is never sent as an AA request header.
+- Added Setu Authentication Manager (`server/aa/providers/setu-auth.js`): acquire/cache/renew the access token, serialise concurrent refreshes (no token storm), invalidate on auth failure, single retry on confirmed auth failure. Never logs credentials/tokens.
+- `setu-crypto.js` → `setuAuthHeaders()` (Bearer + product-instance-id); adapter `http()` uses it with a token-refresh retry wrapper.
+- Setu Account Availability (`POST /v2/account-availability`) + `/aa/setu/availability` route + `getDataSessionStatus` recovery/polling.
+- Docs corrected (SETU_INTEGRATION auth section + source register); `.env.example` updated.
+- Tests 114 → 119. **External Setu sandbox: BLOCKED — no Setu credentials in environment.**
+
+## v1.4.1 — Setu webhook contract fix, webhook idempotency, consent URL surfacing & currency exposure
+- **Fixed Setu webhook handling to the real notification contract**: status now read from `payload.data.status` (Setu posts `{type, consentId, notificationId, data:{status,...}}`), not a top-level `status`. Handles both `CONSENT_STATUS_UPDATE` and `SESSION_STATUS_UPDATE`.
+- **Webhook idempotency** via new `webhook_notifications` table (migration 11): a notification id is processed once; replays return `{ok:true, idempotent:true}`. Audits receipt without storing raw payloads.
+- **Consent URL persisted + surfaced**: new `consents.consent_url` column (migration 12); `/aa/connect` and `/aa/connect-setu` persist the provider consent webview URL; Integrations UI adds an "Open consent" action so a real Setu consent is approved by the customer opening the provider screen (never auto-approved).
+- **External `test:setu:sandbox` corrected to the current official Bearer auth model** (acquires a token via the Setu Authentication Manager; no `x-client-secret` request header). Still credential-gated and BLOCKED here.
+- **Multi-currency exposure in net worth**: `computeNetWorth` now returns a per-currency `currencyBreakdown` + `mixedCurrency`/`baseCurrency` so non-INR balances are surfaced and never silently treated as INR minors (no FX conversion).
+- Tests 119 → 120 (added mixed-currency + webhook idempotency assertions). **External Setu sandbox: BLOCKED — no Setu credentials in environment.**

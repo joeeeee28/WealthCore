@@ -129,8 +129,23 @@ Setu is wired as the first real AA provider behind the existing `AAProvider`
 interface; WealthCore's canonical model stays provider-neutral. Sandbox/UAT is the
 target; production requires credentials + onboarding and is never assumed.
 
-### v1.3.1 — Setu auth contract update
-`server/aa/crypto/setu-crypto.js` emits the current official Setu auth headers
-(`x-client-id`, `x-client-secret`, `x-product-instance-id`). A credential-gated
-external integration test (`tests/setu-external.test.js`, `npm run test:setu:sandbox`)
-targets the real sandbox and is excluded from `npm test`. See `docs/SETU_INTEGRATION.md`.
+### v1.3.1 / v1.4.x — Setu auth contract update (current official Bearer model)
+- `server/aa/crypto/setu-crypto.js` emits `Authorization: Bearer <access_token>` +
+  `x-product-instance-id`. The access token is acquired from Bridge client credentials
+  via the Setu Auth Mechanism / getToken (`server/aa/providers/setu-auth.js`). The
+  **client secret is used only to acquire the token and is never sent as an AA request
+  header.** (This supersedes the earlier `x-client-id`/`x-client-secret` header model.)
+- A credential-gated external integration test
+  (`tests/setu-external.test.js`, `npm run test:setu:sandbox`) targets the real sandbox
+  using the same Bearer model and is excluded from `npm test`. See `docs/SETU_INTEGRATION.md`.
+- `router.post('/aa/webhook/setu')` handles Setu's real notification contract
+  (`data.status`, `CONSENT_STATUS_UPDATE`/`SESSION_STATUS_UPDATE`), is **idempotent** via
+  the `webhook_notifications` table, and audits receipts without storing raw payloads.
+  `consents.consent_url` persists the provider consent webview URL so a real consent
+  can be opened by the customer for approval. `computeNetWorth` exposes a per-currency
+  `currencyBreakdown` + `mixedCurrency` so non-INR exposure is surfaced.
+
+### ADR-AA-007
+Setu is wired as the first real AA provider behind the existing `AAProvider`
+interface; WealthCore's canonical model stays provider-neutral. Sandbox/UAT is the
+target; production requires credentials + onboarding and is never assumed.

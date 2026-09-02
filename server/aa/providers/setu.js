@@ -351,10 +351,30 @@ export const SetuProvider = {
   async handleNotification(notification) {
     const hasValid = verifySetuWebhookSignature(notification.rawBody || '', notification.headers && notification.headers['x-webhook-signature']);
     // If no webhook secret is configured we can still accept a verified payload.
+    // Setu's current AA notifications API does not publish a signature header
+    // contract, so verification is best-effort/optional (defence-in-depth) and is
+    // only enforced when a signing secret is configured on the Bridge.
     if (notification && notification.rawBody && !hasValid.valid && hasValid.reason !== 'NO_SECRET_CONFIGURED') {
       throw aaError(AA_ERROR_CODES.INVALID_SIGNATURE, 'Invalid Setu webhook signature.');
     }
-    return { ok: true, handled: true, payload: notification.payload || null };
+
+    // Parse the canonical Setu notification envelope (see the Setu Notifications
+    // doc). WealthCore processes exactly these fields; never the raw FI payload.
+    const p = notification.payload || {};
+    const data = p.data || {};
+    return {
+      ok: true,
+      handled: true,
+      signatureValid: hasValid.valid,
+      signatureReason: hasValid.reason,
+      type: String(p.type || p.event || '').toUpperCase(),
+      consentId: p.consentId || p.consent_id || data.consentId || null,
+      dataSessionId: p.dataSessionId || p.data_session_id || null,
+      notificationId: p.notificationId || p.notification_id || null,
+      status: String(data.status || p.status || '').toUpperCase() || null,
+      success: p.success !== false,
+      errorCode: (p.error && (p.error.code || p.error.message)) || null,
+    };
   },
 
   normalizeFinancialData(data) {

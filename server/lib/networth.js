@@ -34,12 +34,26 @@ export function computeNetWorth(db, userId) {
   const assetClasses = new Map();
   const byType = new Map();
 
+  // Per-currency tracking so a USD balance is never silently added to an INR
+  // headline. This surfaces mixed-currency exposure; no FX conversion is applied.
+  const perCurrency = new Map();
+  const addPerCurrency = (currency, kind, amt) => {
+    const c = String(currency || 'INR').toUpperCase();
+    if (!perCurrency.has(c)) perCurrency.set(c, { currency: c, assetsMinor: 0, liabilitiesMinor: 0, netWorthMinor: 0 });
+    const row = perCurrency.get(c);
+    if (kind === 'liability') row.liabilitiesMinor = money.add(row.liabilitiesMinor, amt);
+    else row.assetsMinor = money.add(row.assetsMinor, amt);
+  };
+
   for (const acct of accounts) {
     const amt = Number(acct.balance_minor);
+    const cur = String(acct.currency || 'INR').toUpperCase();
     if (acct.is_liability) {
       totalLiabilitiesMinor = money.add(totalLiabilitiesMinor, amt);
+      addPerCurrency(cur, 'liability', amt);
     } else {
       totalAssetsMinor = money.add(totalAssetsMinor, amt);
+      addPerCurrency(cur, 'asset', amt);
       const cls = TYPE_TO_CLASS[acct.type] || 'other';
       assetClasses.set(cls, (assetClasses.get(cls) || 0) + amt);
     }
@@ -51,6 +65,7 @@ export function computeNetWorth(db, userId) {
   // accounts keep only their idle cash in balance_minor).
   for (const h of holdings) {
     totalAssetsMinor = money.add(totalAssetsMinor, h.currentValueMinor);
+    addPerCurrency(h.currency, 'asset', h.currentValueMinor);
     const cls = h.assetClass || 'investments';
     assetClasses.set(cls, (assetClasses.get(cls) || 0) + h.currentValueMinor);
     const typeKey = `${h.accountType}:Investments`;
@@ -61,10 +76,20 @@ export function computeNetWorth(db, userId) {
   const totalLiabilitiesDouble = Number(totalLiabilitiesMinor);
   const netWorthMinor = Number(BigInt(totalAssetsDouble) - BigInt(totalLiabilitiesDouble));
 
+  const currencyBreakdown = [...perCurrency.values()].map((r) => ({
+    ...r, netWorthMinor: Number(BigInt(r.assetsMinor) - BigInt(r.liabilitiesMinor)),
+  }));
+  // NOTE: totalAssetsMinor/totalLiabilitiesMinor/netWorthMinor sum RAW minor
+  // units across all currencies without FX conversion. When multiple currencies
+  // are present the client should present the per-currency or FX-converted view
+  // rather than treating a USD minor as equal to an INR minor.
   return {
     totalAssetsMinor,
     totalLiabilitiesMinor,
     netWorthMinor,
+    baseCurrency: 'INR',
+    currencyBreakdown,
+    mixedCurrency: currencyBreakdown.length > 1,
     assetClassBreakdown: [...assetClasses.entries()].map(([name, value]) => ({
       name, valueMinor: value,
       pct: totalAssetsDouble ? (value / totalAssetsDouble) : 0,

@@ -243,6 +243,42 @@ export const MIGRATIONS = [
       }
     },
   },
+  {
+    id: 11,
+    name: 'aa_webhook_notifications_idempotency',
+    up(db) {
+      // Idempotency + audit for provider webhooks. A notification is processed
+      // at most once per (provider, notification_id); the row records the
+      // event type and the entities it touched so replays are safely ignored
+      // and the ingestion is auditable. No raw financial payloads are stored.
+      if (!tableExists(db, 'webhook_notifications')) {
+        db.exec(`CREATE TABLE webhook_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          provider TEXT NOT NULL DEFAULT 'setu',
+          notification_id TEXT NOT NULL,
+          type TEXT,
+          consent_id TEXT,
+          data_session_id TEXT,
+          status TEXT,
+          received_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(provider, notification_id)
+        )`);
+        db.exec('CREATE INDEX IF NOT EXISTS idx_webhook_notif_consent ON webhook_notifications(consent_id)');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_webhook_notif_session ON webhook_notifications(data_session_id)');
+      }
+    },
+  },
+  {
+    id: 12,
+    name: 'aa_consent_url',
+    up(db) {
+      // The consent webview/redirect URL issued by a provider (e.g. Setu's
+      // `<sandbox>/consents/webview/<id>`). Persisted so the customer can open
+      // the provider's consent UI to approve a REAL consent, and so the same URL
+      // is available for re-use while the consent is still PENDING.
+      addColumn(db, 'consents', 'consent_url', 'TEXT');
+    },
+  },
 ];
 
 export function runMigrations(db) {

@@ -15,6 +15,7 @@ Documentation is part of the product. This is the single source of truth for wha
 - `API_SPECIFICATION.md` — REST endpoints, request/response, errors
 - `SYNC_ENGINE.md` — synchronisation behaviour
 - `AA_INTEGRATION.md` — Account Aggregator / FIU integration & consent lifecycle
+- `SETU_INTEGRATION.md` — Setu AA gateway adapter, current official auth contract, webhook contract & external-sandbox result
 - `MARKET_DATA.md` — price freshness model and provider config
 - `AI_ARCHITECTURE.md` — AI tool layer, context, hallucination prevention
 
