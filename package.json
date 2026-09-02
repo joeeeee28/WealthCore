@@ -1,0 +1,28 @@
+{
+  "name": "wealthcore",
+  "version": "1.1.0",
+  "description": "WealthCore - Your Entire Financial Life. One Intelligent Core. A private, personal financial operating system.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node --test",
+    "seed": "node server/seed.js",
+    "lint": "node --check server/index.js && node --check server/routes/api.js && node --check server/lib/*.js && node --check server/db/*.js && node --check server/config.js",
+    "lint:client": "node --check public/app.js",
+    "audit:secrets": "grep -rInE 'API_KEY|SECRET|PASSWORD|PRIVATE_KEY|BEGIN (RSA|EC|OPENSSH) PRIVATE' server public --include='*.js' | grep -vE 'WEALTHCORE_|process\\\\.env|password_hash|password_salt|session|Bearer|token,|req\\\\.body|headers\\\\.authorization|NO_SECRET_CONFIGURED|credentials required|READY_FOR_CONFIGURATION' || echo 'No hard-coded secrets found.'",
+    "audit:deps": "npm audit --audit-level=high",
+    "config:check": "node --input-type=module -e \"import {config,validateConfig} from './server/config.js';const r=validateConfig(config());console.log(r.valid?'Config valid':r.errors.join('\\n'));process.exit(r.valid?0:1)\"",
+    "test:setu:sandbox": "node tests/setu-external.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1"
+  }
+}

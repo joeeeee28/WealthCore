@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Runtime database (local, user-specific; never committed)
+data/
+
+# Logs / temp
+*.log
+.DS_Store
+
+# Coverage
+coverage/
