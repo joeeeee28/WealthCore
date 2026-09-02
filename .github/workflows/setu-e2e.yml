@@ -102,6 +102,15 @@ jobs:
           else
             echo "NETWORK_TEST: PROVIDER_RESPONSE — reachable, HTTP $CODE"
           fi
+          # 4) Generate Token API host must also be reachable (token fetch happens first).
+          TOKEN_HOST="https://uat.setu.co"
+          TOKEN_CODE=$(curl -sS -m 25 -o /dev/null -w "%{http_code}" "$TOKEN_HOST" 2>/tmp/setu_token_curl_err || true)
+          if [ "$TOKEN_CODE" = "000" ] || [ -z "$TOKEN_CODE" ]; then
+            ERRTXT=$(cat /tmp/setu_token_curl_err 2>/dev/null || true)
+            echo "NETWORK_TEST: TOKEN_HOST_FAIL — connection could not complete to $TOKEN_HOST: $ERRTXT"
+            exit 2
+          fi
+          echo "NETWORK_TEST: TOKEN_HOST_OK — $TOKEN_HOST returned HTTP $TOKEN_CODE (a 4xx still proves the socket/TLS/TCP path)"
 
       - name: Run the REAL Setu sandbox external test (credential-gated)
         id: setu

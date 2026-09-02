@@ -1,13 +1,16 @@
 // WealthCore — Setu Authentication Manager.
 //
-// CURRENT OFFICIAL SETU AUTH MODEL (verified from Setu AA docs):
+// CURRENT OFFICIAL SETU AUTH MODEL (verified from Setu docs):
 //   * Bridge provides client_id + client_secret + x-product-instance-id.
-//   * Setu AA APIs require an ACCESS TOKEN in `Authorization: Bearer <token>`
-//     and `x-product-instance-id`. The access token is obtained via the Setu
-//     "Auth Mechanism / getToken" endpoint (Account Availability docs reference
-//     this as `api-reference#/operation~getToken`).
-//   * The client secret is NEVER sent as a request header on AA APIs — it is
-//     used only to acquire the access token.
+//   * The access token is acquired from Setu's **Generate Token API** with a
+//     JSON body containing `{ clientID, secret }`.
+//   * Every Setu AA API then uses `Authorization: Bearer <token>` and
+//     `x-product-instance-id`. The client secret is NEVER sent as a request
+//     header on AA APIs — it is used only to acquire the access token.
+//   * Generate Token API:
+//       Sandbox:   POST https://uat.setu.co/api/v2/auth/token
+//       Production: POST https://prod.setu.co/api/v2/auth/token
+//       Response:  { data: { token, expiresIn } }
 //
 // This module:
 //   * acquires an access token from client credentials
@@ -16,19 +19,14 @@
 //   * serialises concurrent refresh so it never storms the token endpoint
 //   * retries once on a transient authentication expiry
 //   * never logs credentials or tokens
-//
-// PENDING SETU DOCUMENTATION CONFIRMATION:
-//   * the exact getToken request shape (form-encoded client_credentials vs
-//     Basic auth). The token endpoint and grant params are not fully published
-//     on the public docs; this is isolated behind `setuTokenEndpoint()` and
-//     `setuTokenRequest()` so the exact wire format can be confirmed with Setu
-//     without touching the rest of the AA layer.
 
 import { config } from '../../config.js';
 import { aaError, AA_ERROR_CODES } from '../errors.js';
 
 const BASE_SANDBOX = 'https://fiu-sandbox.setu.co';
 const BASE_PRODUCTION = 'https://fiu.setu.co';
+const TOKEN_SANDBOX = 'https://uat.setu.co/api/v2/auth/token';
+const TOKEN_PRODUCTION = 'https://prod.setu.co/api/v2/auth/token';
 
 function env() {
   return config();
@@ -36,23 +34,23 @@ function env() {
 
 /** Highest-confidence token endpoint for the current Setu AA environment. */
 function setuTokenEndpoint() {
-  // Setu's token endpoint host is environment-specific; default to the same
-  // base host used by the AA API. Override via WEALTHCORE_SETU_TOKEN_URL or
-  // SETU_TOKEN_URL (both resolved into config().setu.tokenUrl).
-  const base = baseUrl();
-  const cfg = config().setu || {};
-  // Candidate token path. PENDING PROVIDER CONFIRMATION: exact path.
-  return cfg.tokenUrl || `${base}/auth/token`;
+  // Setu's Generate Token API uses a different host than the AA APIs. Default to
+  // the documented sandbox/production endpoint; override via
+  // WEALTHCORE_SETU_TOKEN_URL or SETU_TOKEN_URL (both resolved into
+  // config().setu.tokenUrl).
+  const cfg = env();
+  const prod = cfg.aaEnvironment === 'production' || (cfg.setu && cfg.setu.environment === 'production');
+  return cfg.setu?.tokenUrl || (prod ? TOKEN_PRODUCTION : TOKEN_SANDBOX);
 }
 
 /** Build the token request body/headers from client credentials. */
 function setuTokenRequest(clientId, clientSecret) {
-  // OAuth2 client-credentials style. PENDING SETU CONFIRMATION: exact grant
-  // fields/scope. Isolated so the wire format can be corrected in one place.
+  // Current official Setu Generate Token API: JSON, NOT OAuth2 form-encoded
+  // client_credentials. Isolated so the wire format stays in one place.
   return {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }).toString(),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ clientID: clientId, secret: clientSecret }),
   };
 }
 
@@ -113,12 +111,13 @@ async function fetchToken(cfg) {
     throw aaError(res.status === 401 || res.status === 403 ? AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED : AA_ERROR_CODES.PROVIDER_UNAVAILABLE,
       `Setu token request failed (HTTP ${res.status}).`, { status: res.status });
   }
-  const token = json && (json.access_token || (json.token && json.token));
-  if (!token) throw aaError(AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED, 'Setu token response did not include an access token.');
-  const expiresIn = Number(json && (json.expires_in || json.expiresIn)); // seconds
+  // Current official Generate Token API returns the token in data.token.
+  const token = json && json.data && json.data.token;
+  if (!token) throw aaError(AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED, 'Setu token response did not include data.token.');
+  const expiresIn = Number(json && json.data && (json.data.expiresIn || json.data.expires_in)); // seconds
   return {
     token,
-    expiresAtMs: expiresIn > 0 ? Date.now() + (expiresIn - 30) * 1000 : Date.now() + 55 * 60 * 1000,
+    expiresAtMs: expiresIn > 0 ? Date.now() + (expiresIn - 30) * 1000 : Date.now() + 25 * 60 * 1000,
   };
 }
 

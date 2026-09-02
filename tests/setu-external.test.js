@@ -6,7 +6,9 @@
 // local simulator is NOT used here.
 //
 // It uses the CURRENT OFFICIAL Setu auth model:
-//   Bridge (client_id + client_secret) -> Auth Mechanism / getToken -> access_token
+//   Bridge (client_id + client_secret) -> Generate Token API
+//   (POST https://uat.setu.co/api/v2/auth/token; JSON {clientID, secret};
+//   response data.token) -> access_token
 //   -> `Authorization: Bearer <access_token>` + `x-product-instance-id`
 // The client secret is NEVER sent as an AA request header.
 //
@@ -64,8 +66,8 @@ test('REAL Setu sandbox connectivity (Bearer auth)', { skip: !credsAvailable() }
   resetConfig();
   const { getAccessToken } = await import('../server/aa/providers/setu-auth.js');
 
-  // 1. Acquire a real Setu access token from client credentials (getToken/Auth
-  //    Mechanism). This is the only place the client secret is used.
+  // 1. Acquire a real Setu access token from client credentials via the current
+  //    official Generate Token API. This is the only place the client secret is used.
   let token;
   try {
     token = await getAccessToken();

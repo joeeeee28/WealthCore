@@ -110,3 +110,12 @@
 - Added `docs/SETU_GITHUB_ACTIONS.md` documenting why GH Actions is required, the three required Secrets, the manual trigger, what the workflow tests, the public webhook/callback requirement, the human Setu-approval step, and the definition of real Setu success.
 - `docs/README.md` updated to link the new doc.
 - **Status: `Setu Sandbox = BLOCKED`** — the workflow is prepared but has NOT executed against real Setu. Repository-owner action required: add the three Secrets and run the workflow; the real full E2E also needs a public inbound HTTPS callback.
+
+## v1.4.5 — Correct Setu AA token acquisition to current official Generate Token API
+- Corrected Setu token acquisition to the **current official Generate Token API**: sandbox `POST https://uat.setu.co/api/v2/auth/token` (production `https://prod.setu.co/api/v2/auth/token`), `Content-Type: application/json`, body `{ "clientID": "<client_id>", "secret": "<client_secret>" }`, response token read from **`data.token`**.
+- **Removed the old OAuth2 form-encoded `grant_type=client_credentials` request**; it must not be restored.
+- `server/aa/providers/setu-auth.js`: `setuTokenEndpoint()` defaults to the documented Generate Token API host/path; `setuTokenRequest()` sends the JSON body; `fetchToken()` reads `data.token` and `data.expiresIn`, with a conservative cache lease when expiry is absent.
+- Updated `.env.example`, `docs/SETU_INTEGRATION.md`, and source comments in `setu-crypto.js`/`setu.js` to the current official contract.
+- Updated the local Setu simulator so it only accepts the JSON `clientID`/`secret` token request and returns `data.token`; added `setu-auth` tests for the default endpoint and request shape.
+- Tests: **123 → 125** (added 2 current-official-auth tests; 1 real-sandbox connectivity test stays skipped). `audit:secrets`/lint/config pass.
+- **Status: Setu sandbox real E2E still BLOCKED by environment network egress** (`fiu-sandbox.setu.co` + `uat.setu.co` unreachable from this sandbox); a network-enabled runner with the repo GitHub Secrets is required afterward.

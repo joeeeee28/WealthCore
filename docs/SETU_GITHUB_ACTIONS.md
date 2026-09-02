@@ -16,7 +16,7 @@ genuine Setu sandbox E2E.
 
 | Constraint | Local dev sandbox | GitHub-hosted runner |
 |---|---|---|
-| Outbound HTTPS to `fiu-sandbox.setu.co` | BLOCKED (TLS reset) | Allowed |
+| Outbound HTTPS to `fiu-sandbox.setu.co` / `uat.setu.co` | BLOCKED (TLS reset) | Allowed |
 | Public inbound HTTPS webhook callback | Not available | Not automatic (see §Webhooks) |
 | Secure credential injection | Env-only (no dedicated store) | GitHub Secrets |
 | Human Setu consent approval | Manual | Manual (required — cannot be automated) |
@@ -51,8 +51,9 @@ The workflow is **`workflow_dispatch` only** — it is **not** triggered by push
 3. The workflow runs on `ubuntu-latest` and executes in this order:
    - Checkout + Node 22 + dependency install (prebuilt `better-sqlite3`).
    - `npm run config:setu` — presence-only validation (never prints secrets).
-   - Outbound connectivity test to `https://fiu-sandbox.setu.co` (distinguishes
-     DNS / TLS / transport / HTTP / provider response; **no `curl -k`**).
+   - Outbound connectivity test to `https://fiu-sandbox.setu.co` and the Generate
+     Token API host `https://uat.setu.co` (distinguishes DNS / TLS / transport / HTTP /
+     provider response; **no `curl -k`**).
    - `npm run test:setu:sandbox` — the genuine Setu external test (token → consent).
    - Full regression (`npm test`), lint, `config:check`, `audit:secrets`, `npm audit`.
    - Uploads a **redacted** evidence summary (never raw logs/secrets/payloads).
@@ -61,7 +62,8 @@ The workflow is **`workflow_dispatch` only** — it is **not** triggered by push
 
 **Tests:**
 - Real Setu token acquisition via the current official Bearer model (client credentials
-  → `getToken` → `Authorization: Bearer` + `x-product-instance-id`).
+  → Generate Token API `POST /api/v2/auth/token`, JSON `clientID`/`secret`, response
+  `data.token` → `Authorization: Bearer` + `x-product-instance-id`).
 - Real Setu connectivity + consent creation attempt.
 - Full local regression + security scans.
 
@@ -112,7 +114,7 @@ fake OTP approval. Where the human must intervene:
 real Setu sandbox** (never the local simulator or MockAA):
 
 - Real Setu network reachable (TLS + HTTP).
-- Real `getToken` succeeded → Bearer access token obtained.
+- Real Generate Token API succeeded → Bearer access token obtained (`data.token`).
 - Real consent created (consent ID + URL + status).
 - Real consent approved (human) → status `ACTIVE`.
 - Real Setu webhook delivered to `/api/v1/aa/webhook/setu` (consent + session events).

@@ -49,9 +49,14 @@ function startSetuSimulator() {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      // Token endpoint (Auth Mechanism): accepts client_id+client_secret and returns an access token.
+      // Token endpoint (current official Generate Token API): the request is JSON
+      // with clientID/secret and the token is returned under data.token.
       if (req.method === 'POST' && url.pathname === '/auth/token') {
-        return json(res, 200, { access_token: 'sim-access-token', token_type: 'Bearer', expires_in: 3600 });
+        const tokenReq = body ? JSON.parse(body) : {};
+        if ((req.headers['content-type'] || '') !== 'application/json' || !tokenReq.clientID || !tokenReq.secret) {
+          return json(res, 400, { status: 400, success: false, data: { error: 'invalid token request' } });
+        }
+        return json(res, 200, { status: 200, success: true, data: { token: 'sim-access-token', expiresIn: 3600 } });
       }
       // All other API calls must carry Authorization: Bearer <access_token> + x-product-instance-id.
       const auth = req.headers['authorization'] || '';
