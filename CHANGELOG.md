@@ -67,3 +67,9 @@
 - Added credential-gated external Setu sandbox integration test (`npm run test:setu:sandbox`, `tests/setu-external.test.js`) that is NOT part of `npm test` and skips/aborts if credentials are absent.
 - `npm test` stays credential-free; local Setu simulator now asserts the current auth headers.
 - Tests: 113 -> 114 (auth-model header test). External Setu E2E: BLOCKED (no credentials in environment).
+
+## v1.3.2 — External Setu sandbox connectivity re-verified (BLOCKED)
+- Re-confirmed the current official Setu contract (v2 consents, /consents/:id, consent URL, status PENDING→ACTIVE, Bridge client-credentials auth) matches the adapter.
+- Re-verified NO Setu credentials present in the environment: /aa/providers and /config honestly report setu configured=false / READY_FOR_CONFIGURATION.
+- `npm run test:setu:sandbox` reports BLOCKED — Real Setu sandbox credentials/access are not available (test skips).
+- No fabricated connectivity; local simulator E2E remains the credential-free contract proof. Docs recorded.

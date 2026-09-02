@@ -156,3 +156,24 @@ by `external_ref`, transactions by `source_txn_id`/`dedup_key`; a reused Setu
 - Setu sandbox access (`support@setu.co` / `aa@setu.co`) to run `test:setu:sandbox`
 - Production: FIU eligibility / TSP arrangement, Sahamati certification, central
   registry, production credentials
+
+## 11. External sandbox verification — recorded result (2026-09-02)
+
+| Check | Result |
+|-------|--------|
+| Setu credentials present in environment | **NO** (WEALTHCORE_SETU_CLIENT_ID / _CLIENT_SECRET / _PRODUCT_INSTANCE_ID all unset; no .env) |
+| `GET /aa/providers` | `setu configured=false, mode=sandbox, requiresCredentials=true` (honest) |
+| `GET /config` | `aa.configured=false` — `READY_FOR_CONFIGURATION` / `Provider credentials required` |
+| `npm run test:setu:sandbox` | **BLOCKED — Real Setu sandbox credentials/access are not available.** (test SKIPped) |
+| External Setu sandbox reached | **NO** |
+| Local simulator E2E (credential-free) | **PASS** — verifies contract + current auth headers + full WealthCore flow |
+
+**Conclusion: Setu external sandbox connectivity is BLOCKED pending real Setu-issued
+credentials. The adapter and simulator E2E are complete and contract-correct; only the
+credential-gated external step is held.** This is the honest state — no fabricated
+connectivity, no simulator passed off as real Setu.
+
+To run the real external sandbox test, provide via environment/secrets (never commit):
+`WEALTHCORE_SETU_CLIENT_ID`, `WEALTHCORE_SETU_CLIENT_SECRET`,
+`WEALTHCORE_SETU_PRODUCT_INSTANCE_ID`, set `AA_PROVIDER=setu`,
+`AA_ENVIRONMENT=sandbox`, then run `npm run test:setu:sandbox`.
