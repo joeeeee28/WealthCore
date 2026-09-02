@@ -10,33 +10,30 @@
 //   POST /sessions               -> create data session { consentId, dataRange, format }
 //   GET  /sessions/:id           -> FI data (COMPLETED/PARTIAL/PENDING; fips[].accounts[].data)
 //   Webhook: Setu -> your endpoint, signed (X-Webhook-Signature)
-//   Auth (current official): x-client-id + x-client-secret + x-product-instance-id
-//     (client-credentials style from the Setu Bridge). Legacy bearer access
-//     tokens are also accepted when only a token is supplied.
+//   Auth (CURRENT OFFICIAL): Bridge provides client_id + client_secret +
+//     x-product-instance-id. Setu AA APIs require `Authorization: Bearer
+//     <access_token>` (obtained via Setu's Auth Mechanism / getToken in
+//     setu-auth.js) + `x-product-instance-id`. The client secret is NEVER sent
+//     as a request header on AA APIs. An auth manager caches/renews the token.
 //
 // Setu's `format=json` sandbox path returns DECRYPTED ReBIT JSON to the FIU, so
 // no FIU-side decryption is required on the default path. The adapter translates
 // that ReBIT JSON into WealthCore's canonical envelope before normalization.
 //
 // Live connectivity is NOT claimed: cataloging is honest via status() and every
-// method returns PROVIDER_NOT_CONFIGURED until credentials (client id/secret +
-// product-instance-id, or a token) are supplied.
+// method returns PROVIDER_NOT_CONFIGURED until credentials are supplied.
 
 import { config } from '../../config.js';
 import { aaError, AA_ERROR_CODES } from '../errors.js';
-import { setuHeaders, setuCryptoConfig, verifySetuWebhookSignature } from '../crypto/setu-crypto.js';
+import { setuCryptoConfig, setuAuthHeaders, verifySetuWebhookSignature } from '../crypto/setu-crypto.js';
+import { baseUrl as setuBaseUrl } from './setu-auth.js';
 
 const SANDBOX = 'sandbox';
 const PRODUCTION = 'production';
 
-function baseUrl() {
-  const s = setuCryptoConfig();
-  const env = config().setu.environment || SANDBOX;
-  if (config().aaEnvironment === PRODUCTION || env === PRODUCTION) {
-    return process.env.WEALTHCORE_SETU_BASE_URL || 'https://fiu.setu.co';
-  }
-  return s.baseUrl || 'https://fiu-sandbox.setu.co';
-}
+// baseUrl() is imported from setu-auth.js (setuBaseUrl) so the adapter and the
+// auth manager always agree on the environment.
+const baseUrl = setuBaseUrl;
 
 const DEPOSIT_TO_ACCOUNT_TYPE = { SAVINGS: 'savings', CURRENT: 'current', FD: 'fd', TERM_DEPOSIT: 'fd', RECURRING_DEPOSIT: 'fd', LOAN: 'loan', CREDIT_CARD: 'credit' };
 
@@ -57,8 +54,10 @@ function mapConsentStatus(setuStatus) {
   }
 }
 
-async function http(method, path, { body, timeoutMs = 20000 } = {}) {
-  const headers = setuHeaders();
+async function http(method, path, { body, timeoutMs = 30000 } = {}) {
+  // Uses the CURRENT OFFICIAL model: `Authorization: Bearer <access_token>`
+  // (acquired from client credentials via setu-auth.js) + x-product-instance-id.
+  const headers = await setuAuthHeaders();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -94,12 +93,29 @@ function mapSetuError(code) {
   return AA_ERROR_CODES.PROVIDER_UNAVAILABLE;
 }
 
+async function httpWithTokenRefresh(method, path, opts = {}) {
+  try {
+    return await http(method, path, opts);
+  } catch (e) {
+    // A single retry on a confirmed authentication failure is safe and avoids a
+    // token storm. Never retry on consent/data/validation errors.
+    if (e && (e.code === AA_ERROR_CODES.AUTHENTICATION_FAILED || e.code === AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED)) {
+      const { invalidateAccessToken, setuCreds } = await import('./setu-auth.js');
+      invalidateAccessToken(setuCreds().clientId);
+      return http(method, path, opts);
+    }
+    throw e;
+  }
+}
+
 export const SETU_ENDPOINTS = {
   createConsent: '/v2/consents',
   getConsent: (id) => `/consents/${id}`,
   revokeConsent: (id) => `/v2/consents/${id}/revoke`,
   createSession: '/sessions',
   fetchSession: (id) => `/sessions/${id}`,
+  getDataSessions: (consentId) => `/v2/consents/${consentId}/data-sessions`,
+  accountAvailability: '/v2/account-availability',
 };
 
 /** Translate Setu's decrypted ReBIT FI JSON into the canonical envelope. */
@@ -217,7 +233,7 @@ export const SetuProvider = {
       environment: env === PRODUCTION ? 'PRODUCTION' : 'SANDBOX',
       detail: configured
         ? `Setu configured (${env === PRODUCTION ? 'production' : 'sandbox/UAT'}). data@setu.co`
-        : 'READY_FOR_CONFIGURATION — Setu credentials required (x-client-id + x-client-secret + x-product-instance-id). aa@setu.co',
+        : 'READY_FOR_CONFIGURATION — Setu credentials required (client_id + client_secret + x-product-instance-id from the Setu Bridge). aa@setu.co',
     };
   },
 
@@ -228,7 +244,7 @@ export const SetuProvider = {
   _requireConfigured() {
     const s = setuCryptoConfig();
     if (!s.configured) {
-      throw aaError(AA_ERROR_CODES.PROVIDER_NOT_CONFIGURED, 'Setu credentials are required (x-client-id + x-client-secret + x-product-instance-id, or an access token).');
+      throw aaError(AA_ERROR_CODES.PROVIDER_NOT_CONFIGURED, 'Setu credentials are required (client_id + client_secret + x-product-instance-id from the Setu Bridge).');
     }
     return s;
   },
@@ -244,7 +260,7 @@ export const SetuProvider = {
       additionalParams: { tags: ['WealthCore'] },
     };
     // The consent request uses a `context` to convey purpose/FI types for v2.
-    const r = await http('POST', SETU_ENDPOINTS.createConsent, { body });
+    const r = await httpWithTokenRefresh('POST', SETU_ENDPOINTS.createConsent, { body });
     const detail = r.detail || {};
     return {
       consent: {
@@ -271,20 +287,20 @@ export const SetuProvider = {
 
   async getConsent(consentId) {
     this._requireConfigured();
-    const r = await http('GET', SETU_ENDPOINTS.getConsent(consentId));
+    const r = await httpWithTokenRefresh('GET', SETU_ENDPOINTS.getConsent(consentId));
     return { consentId, status: mapConsentStatus(r.status), redirectUrl: r.url, provider: 'setu' };
   },
 
   async getConsentStatus(consentId) {
     this._requireConfigured();
-    const r = await http('GET', SETU_ENDPOINTS.getConsent(consentId));
+    const r = await httpWithTokenRefresh('GET', SETU_ENDPOINTS.getConsent(consentId));
     return { consentId, status: mapConsentStatus(r.status) };
   },
 
   async revokeConsent(consentId) {
     this._requireConfigured();
     try {
-      const r = await http('POST', SETU_ENDPOINTS.revokeConsent(consentId), { body: {} });
+      const r = await httpWithTokenRefresh('POST', SETU_ENDPOINTS.revokeConsent(consentId), { body: {} });
       return { consentId, status: mapConsentStatus((r && r.status) || 'revoked'), revoked: true };
     } catch (e) {
       // If not found, treat as already revoked.
@@ -300,14 +316,14 @@ export const SetuProvider = {
       dataRange: dataRange || { from: '2026-01-01T00:00:00.000Z', to: '2026-12-31T23:59:59.000Z' },
       format: 'json',
     };
-    const r = await http('POST', SETU_ENDPOINTS.createSession, { body });
+    const r = await httpWithTokenRefresh('POST', SETU_ENDPOINTS.createSession, { body });
     const sessionId = r.id || (r.session && r.session.id) || null;
     return { consentId, sessionId, status: 'data_requested' };
   },
 
   async getFIData(sessionId) {
     this._requireConfigured();
-    const r = await http('GET', SETU_ENDPOINTS.fetchSession(sessionId));
+    const r = await httpWithTokenRefresh('GET', SETU_ENDPOINTS.fetchSession(sessionId));
     const status = String(r.status || '').toUpperCase();
     return {
       sessionId,
@@ -315,6 +331,21 @@ export const SetuProvider = {
       status: status === 'COMPLETED' ? 'fetched' : status === 'PARTIAL' ? 'partial_failure' : 'data_ready',
       data: r,
     };
+  },
+
+  /** Setu Account Availability: verify a customer's accounts exist across AAs. */
+  async checkAccountAvailability({ mobileNumber } = {}) {
+    this._requireConfigured();
+    if (!mobileNumber) throw aaError(AA_ERROR_CODES.INVALID_PAYLOAD, 'mobileNumber is required for account availability.');
+    const r = await httpWithTokenRefresh('POST', SETU_ENDPOINTS.accountAvailability, { body: { mobileNumber } });
+    return { accounts: r.accounts || [], traceId: r.traceId || null };
+  },
+
+  /** List data sessions for a consent (used for recovery/polling). */
+  async getDataSessionStatus(consentId) {
+    this._requireConfigured();
+    const r = await httpWithTokenRefresh('GET', SETU_ENDPOINTS.getDataSessions(consentId));
+    return { consentId, dataSessions: r.dataSessions || [] };
   },
 
   async handleNotification(notification) {

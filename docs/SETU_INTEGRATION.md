@@ -41,15 +41,22 @@ Net Worth / Portfolio / Dashboard
 | Fetch FI data | `GET /sessions/:id` | status `COMPLETED/PARTIAL/PENDING`; `fips[].accounts[].data` ReBIT JSON |
 | Notification | Webhook → your endpoint (Setu Bridge) | `X-Webhook-Signature` |
 
-### Authentication (CURRENT OFFICIAL — correction)
+### Authentication (CURRENT OFFICIAL — verified)
 
-Setu's current AA contract provides **`x-client-id` + `x-client-secret` (client-credentials
-style)** and **`x-product-instance-id` (the Product ID)** via the Setu Bridge. These are
-sent as request headers. There is **no direct `Authorization: Bearer` access token** in
-the current sandbox gate. The WealthCore adapter was updated from the earlier
-`Authorization: Bearer <token>` model to the current official `x-client-id` /
-`x-client-secret` / `x-product-instance-id` model (a legacy bearer token is still
-accepted only when no client credentials are supplied, for backward compatibility).
+Setu's current AA contract:
+1. The **Setu Bridge** provides **client_id**, **client_secret** and
+   **x-product-instance-id** (the Product ID).
+2. The client credentials are used to **acquire an access token** via Setu's
+   **Auth Mechanism / getToken** endpoint (`server/aa/providers/setu-auth.js`).
+3. Every AA API request then sends:
+   - `Authorization: Bearer <access_token>`
+   - `x-product-instance-id: <product-instance-id>`
+
+The **client secret is never sent as a request header on the AA APIs** — it is used
+only to obtain the access token. WealthCore implements a **Setu Authentication
+Manager** (`setu-auth.js`) that caches the token, tracks expiry, renews before
+expiry, serialises concurrent refreshes (no token storm), and invalidates the token
+on a confirmed auth failure. **No credential or token is ever logged.**
 
 Sandbox base: `https://fiu-sandbox.setu.co` · Production: `https://fiu.setu.co`.
 
@@ -76,15 +83,24 @@ AA_PROVIDER=setu            # or WEALTHCORE_AA_PROVIDER=setu
 AA_ENVIRONMENT=sandbox      # sandbox | production
 SETU_ENVIRONMENT=sandbox
 WEALTHCORE_SETU_BASE_URL=https://fiu-sandbox.setu.co   # sandbox
-# CURRENT OFFICIAL AUTH (client credentials) — from the Setu Bridge:
-WEALTHCORE_SETU_CLIENT_ID=                              # x-client-id
-WEALTHCORE_SETU_CLIENT_SECRET=                          # x-client-secret
+# CURRENT OFFICIAL AUTH — client credentials (from the Setu Bridge). These are used
+# to ACQUIRE an access token (Auth Mechanism / getToken), not sent as headers:
+WEALTHCORE_SETU_CLIENT_ID=                              # client_id
+WEALTHCORE_SETU_CLIENT_SECRET=                          # client_secret
 WEALTHCORE_SETU_PRODUCT_INSTANCE_ID=                    # product-instance-id
-# Legacy access-token alternative (only if client credentials are not used):
+# Override the token endpoint / a legacy short-lived access token (optional):
+# WEALTHCORE_SETU_TOKEN_URL=
 WEALTHCORE_SETU_TOKEN=
 WEALTHCORE_SETU_WEBHOOK_SECRET=                         # for signature verification (optional)
 WEALTHCORE_SETU_SIGNING_PUBLIC_KEY=                     # request-signing public key (optional)
 ```
+
+### Account availability
+
+`POST /v2/account-availability` (Setu) verifies a customer's accounts across AAs using a
+mobile number. WealthCore exposes it as `POST /api/v1/aa/setu/availability` and the
+adapter method `checkAccountAvailability({ mobileNumber })` which uses the same
+`Authorization: Bearer <token>` + `x-product-instance-id` auth model.
 
 ## 5. Environment separation & production safety
 
@@ -119,18 +135,25 @@ available.`** Setu is therefore **not** reported as `configured=true`, and no ex
 connectivity is claimed. The adapter is contract-complete and simulator-verified;
 only the missing credentials prevent the real external E2E.
 
-## 7. Crypto abstraction (server/aa/crypto/setu-crypto.js)
+## 7. Crypto & auth abstraction
 
-- `setuCryptoConfig()` reads Setu config from env (client-credentials or a legacy token).
-- `setuHeaders()` builds `x-client-id`, `x-client-secret`, `x-product-instance-id`
-  (and falls back to `Authorization: Bearer` only for the legacy token path).
+`server/aa/crypto/setu-crypto.js`:
+- `setuCryptoConfig()` reads Setu config from env (client credentials or a legacy token).
+- `setuAuthHeaders()` returns `Authorization: Bearer <access_token>` (acquired via the
+  auth manager) + `x-product-instance-id`. The token is obtained from client credentials.
 - `verifySetuWebhookSignature(rawBody, signatureHeader)` verifies an HMAC signature if
-  `WEALTHCORE_SETU_WEBHOOK_SECRET` is configured; otherwise returns
-  `NO_SECRET_CONFIGURED`.
+  `WEALTHCORE_SETU_WEBHOOK_SECRET` is configured; otherwise returns `NO_SECRET_CONFIGURED`.
 
-`PENDING SETU DOCUMENTATION CONFIRMATION`: exact webhook signature algorithm
-(normalized vs `sha256=...`) and whether the RSA request-signing public key is
-required for outbound calls. These are isolated in the crypto module and never guessed.
+`server/aa/providers/setu-auth.js` (Setu Authentication Manager):
+- `setuCreds()` — detects configured client credentials.
+- `getAccessToken()` — acquires + caches a token, renews before expiry, serialises
+  concurrent refreshes, retries once on a confirmed auth failure.
+- `invalidateAccessToken(clientId)` — clears a cached token.
+
+`PENDING SETU DOCUMENTATION CONFIRMATION`: the exact getToken request wire format
+(form-encoded `grant_type=client_credentials` vs Basic auth / other), the exact token
+endpoint path, and the webhook signature algorithm. These are isolated in `setu-auth.js`
+and `setu-crypto.js` and never guessed.
 
 ## 8. Data provenance & reconciliation
 
@@ -177,3 +200,17 @@ To run the real external sandbox test, provide via environment/secrets (never co
 `WEALTHCORE_SETU_CLIENT_ID`, `WEALTHCORE_SETU_CLIENT_SECRET`,
 `WEALTHCORE_SETU_PRODUCT_INSTANCE_ID`, set `AA_PROVIDER=setu`,
 `AA_ENVIRONMENT=sandbox`, then run `npm run test:setu:sandbox`.
+
+## 12. Source register (official resources used)
+
+| Source | URL | Purpose | Verified | Area |
+|--------|-----|---------|----------|------|
+| Setu AA overview | https://docs.setu.co/data/account-aggregator/overview | Ecosystem/roles | 2026-09 | Architecture |
+| Setu AA quickstart | https://docs.setu.co/data/account-aggregator/quickstart | Bridge onboarding + credentials | 2026-09 | Config/onboarding |
+| Setu consent flow | https://docs.setu.co/data/account-aggregator/api-integration/consent-flow | POST /consents, PENDING→ACTIVE, consent URL | 2026-09 | Consent |
+| Setu data APIs | https://docs.setu.co/data/account-aggregator/api-integration/data-apis | POST /sessions, GET /sessions/:id, PARTIAL/COMPLETED | 2026-09 | Data session |
+| Setu account availability | https://docs.setu.co/data/account-aggregator/api-integration/account-availability-apis | POST /v2/account-availability, Bearer auth | 2026-09 | Account discovery |
+| Setu support FAQ | https://support.setu.co/support/solutions/81000205398 | Bridge sandbox credentials | 2026-09 | Onboarding |
+| RBI NBFC-AA Master Direction | (RBI Master Direction NBFC-Account Aggregator) | Consent, no customer auth credentials | 2026-09 | Regulatory |
+| Sahamati AA onboarding | https://sahamati.org.in/how-to-join-the-account-aggregator-network-to-share-and-access-financial-data/ | FIU/FIP onboarding, UAT, certification | 2026-09 | Regulatory/onboarding |
+| ReBIT AA API / FI schemas | https://api.rebit.org.in/ · https://api.rebit.org.in/spec/aa | ReBIT versions + FI schemas | 2026-09 | Normalization |

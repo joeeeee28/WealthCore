@@ -823,6 +823,21 @@ router.post('/aa/connect-setu', requireUnlocked, async (req, res) => {
   }
 });
 
+// Setu Account Availability: check whether a mobile number has accounts across AAs.
+router.post('/aa/setu/availability', requireUnlocked, async (req, res) => {
+  const prov = getAAPProvider('setu');
+  if (!prov) return err(res, 404, 'NOT_FOUND', 'Setu provider not registered.');
+  const { mobileNumber } = req.body || {};
+  if (!mobileNumber) return err(res, 400, 'INVALID_INPUT', 'mobileNumber is required.');
+  try {
+    const result = await prov.checkAccountAvailability({ mobileNumber });
+    audit(req.user.id, 'aa.setu.availability', '');
+    res.json(result);
+  } catch (e) {
+    return err(res, e.code === 'PROVIDER_NOT_CONFIGURED' ? 400 : 502, e.code === 'PROVIDER_NOT_CONFIGURED' ? 'PROVIDER_NOT_CONFIGURED' : 'AA_ERROR', e.message);
+  }
+});
+
 router.get('/sync/runs', requireUnlocked, (req, res) => {
   const rows = db.prepare('SELECT * FROM sync_runs WHERE user_id=? ORDER BY created_at DESC LIMIT 20').all(req.user.id);
   res.json(rows);

@@ -4,21 +4,19 @@
 // FIU — Setu handles the E2E encryption/decryption via its Rahasya key exchange.
 // Therefore no FIU-side decryption is required for the standard JSON path.
 //
-// CURRENT OFFICIAL AUTH MODEL (verified from Setu AA quickstart docs):
-//   Setu provides x-client-id + x-client-secret (client credentials) and
-//   x-product-instance-id (the Product ID) via the Bridge. These are passed as
-//   request headers on every AA call. There is NO direct `Authorization: Bearer`
-//   access token in the current sandbox gate — credentials are the client id/secret.
+// CURRENT OFFICIAL AUTH MODEL (verified from Setu AA docs):
+//   Bridge provides client_id + client_secret + x-product-instance-id.
+//   Setu AA APIs require `Authorization: Bearer <access_token>` and
+//   `x-product-instance-id`. The access token is obtained via Setu's Auth
+//   Mechanism (getToken) — see setu-auth.js. The client secret is NEVER sent as
+//   a request header on AA APIs; it is used only to acquire the access token.
 //
-// This module isolates the provider-specific auth/signature concerns so real
-// crypto can be supplied via env without touching the core AA layer.
-//
-// PENDING SETU DOCUMENTATION CONFIRMATION:
-//   * exact webhook signature verification algorithm (X-Webhook-Signature)
-//   * whether an RSA request-signing public key is required for outbound calls
-//
+// This module builds the outbound request headers and verifies webhook
+// signatures. Credentials/tokens are never logged.
+
 import crypto from 'node:crypto';
 import { config } from '../../config.js';
+import { getAccessToken } from '../providers/setu-auth.js';
 
 export function setuCryptoConfig() {
   const s = config().setu || {};
@@ -27,17 +25,24 @@ export function setuCryptoConfig() {
     clientId: s.clientId || null,
     clientSecret: s.clientSecret || null,
     productInstanceId: s.productInstanceId || null,
-    // Backward-compat alias: some environments use an access token instead.
+    // Legacy short-lived access token (if supplied directly).
     token: s.token || null,
     webhookSecret: s.webhookSecret || null,
     signingPublicKey: s.signingPublicKey || null,
-    // Configured when either the current client-credentials model is present
-    // (clientId + clientSecret) or a legacy bearer token is supplied.
     configured: Boolean(
       (s.clientId && s.clientSecret && s.productInstanceId) ||
       (s.token && s.productInstanceId),
     ),
   };
+}
+
+export async function setuAuthHeaders() {
+  const cfg = setuCryptoConfig();
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  const token = await getAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (cfg.productInstanceId) headers['x-product-instance-id'] = cfg.productInstanceId;
+  return headers;
 }
 
 /** Verify a Setu webhook signature (HMAC-style) if a secret is configured. */
@@ -53,24 +58,4 @@ export function verifySetuWebhookSignature(rawBody, signatureHeader) {
   return { valid: crypto.timingSafeEqual(a, b), reason: 'OK' };
 }
 
-/**
- * Build the auth headers for outbound Setu calls per the current official
- * model (x-client-id, x-client-secret, x-product-instance-id). If only a
- * bearer token is configured (legacy), fall back to Authorization: Bearer.
- */
-export function setuHeaders() {
-  const cfg = setuCryptoConfig();
-  const headers = {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
-  if (cfg.clientId && cfg.clientSecret) {
-    headers['x-client-id'] = cfg.clientId;
-    headers['x-client-secret'] = cfg.clientSecret;
-  }
-  if (cfg.productInstanceId) headers['x-product-instance-id'] = cfg.productInstanceId;
-  if (cfg.token && !headers['x-client-id']) headers.Authorization = `Bearer ${cfg.token}`;
-  return headers;
-}
-
-export default { setuCryptoConfig, verifySetuWebhookSignature, setuHeaders };
+export default { setuCryptoConfig, setuAuthHeaders, verifySetuWebhookSignature };

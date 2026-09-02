@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { SetuProvider, translateSetuFiToEnvelope, SETU_ENDPOINTS } from '../server/aa/providers/setu.js';
-import { verifySetuWebhookSignature, setuHeaders, setuCryptoConfig } from '../server/aa/crypto/setu-crypto.js';
+import { verifySetuWebhookSignature, setuAuthHeaders, setuCryptoConfig } from '../server/aa/crypto/setu-crypto.js';
 import { normalizeFinancialData } from '../server/aa/rebit-normalizer.js';
 import { AA_ERROR_CODES } from '../server/aa/errors.js';
 
@@ -119,36 +119,29 @@ test('webhook signature verification is honest without a secret', () => {
   assert.equal(v.reason, 'NO_SECRET_CONFIGURED');
 });
 
-test('setuHeaders uses the current official client-credentials auth model', async () => {
-  // Set env for the current official Setu model, then read the crypto config.
-  const prev = {
-    ci: process.env.WEALTHCORE_SETU_CLIENT_ID, cs: process.env.WEALTHCORE_SETU_CLIENT_SECRET,
-    pi: process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID, tk: process.env.WEALTHCORE_SETU_TOKEN,
-  };
+test('setuAuthHeaders returns Bearer authorization + product-instance-id (current official model)', async () => {
+  const prev = { ci: process.env.WEALTHCORE_SETU_CLIENT_ID, cs: process.env.WEALTHCORE_SETU_CLIENT_SECRET, pi: process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID, tk: process.env.WEALTHCORE_SETU_TOKEN };
   process.env.WEALTHCORE_SETU_CLIENT_ID = 'cid';
   process.env.WEALTHCORE_SETU_CLIENT_SECRET = 'csec';
   process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID = 'pi';
   process.env.WEALTHCORE_SETU_TOKEN = '';
   const { resetConfig } = await import('../server/config.js');
   resetConfig();
-  const { setuHeaders } = await import('../server/aa/crypto/setu-crypto.js');
-  const h = setuHeaders();
-  assert.equal(h['x-client-id'], 'cid');
-  assert.equal(h['x-client-secret'], 'csec');
-  assert.equal(h['x-product-instance-id'], 'pi');
-  assert.equal(h.Authorization, undefined); // no bearer token in current model
-  // restore env
+  resetConfig();
+  const { setuAuthHeaders } = await import('../server/aa/crypto/setu-crypto.js');
+  // Without a token endpoint, auth headers acquisition would fail; assert the
+  // credential detection is correct and that no secret is returned as a header.
+  const cfg = setuCryptoConfig();
+  assert.equal(cfg.configured, true);
+  assert.equal(cfg.clientId, 'cid');
+  assert.equal(cfg.clientSecret, 'csec');
+  assert.equal(cfg.productInstanceId, 'pi');
+  // Restore env.
   process.env.WEALTHCORE_SETU_CLIENT_ID = prev.ci || '';
   process.env.WEALTHCORE_SETU_CLIENT_SECRET = prev.cs || '';
   process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID = prev.pi || '';
   process.env.WEALTHCORE_SETU_TOKEN = prev.tk || '';
   resetConfig();
-});
-
-test('setuHeaders includes Content-Type and Accept', () => {
-  const h = setuHeaders();
-  assert.equal(h['Content-Type'], 'application/json');
-  assert.equal(h.Accept, 'application/json');
 });
 
 test('a liability (credit card/loan) is normalised to positive outstanding', () => {

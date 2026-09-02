@@ -45,18 +45,20 @@ function json(res, code, obj) {
 
 function startSetuSimulator() {
   const s = http.createServer((req, res) => {
-    // Current official Setu auth: x-client-id + x-client-secret + x-product-instance-id.
-    const clientId = req.headers['x-client-id'];
-    const clientSecret = req.headers['x-client-secret'];
-    const pi = req.headers['x-product-instance-id'];
-    if (clientId !== 'sim-client-id' || clientSecret !== 'sim-client-secret' || pi !== 'sim-pi') {
-      return json(res, 401, { errorMsg: 'unauthorized (bad client credentials)', errorCode: 'InvalidRequest' });
-    }
-
     const url = new URL(req.url, 'http://x');
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
+      // Token endpoint (Auth Mechanism): accepts client_id+client_secret and returns an access token.
+      if (req.method === 'POST' && url.pathname === '/auth/token') {
+        return json(res, 200, { access_token: 'sim-access-token', token_type: 'Bearer', expires_in: 3600 });
+      }
+      // All other API calls must carry Authorization: Bearer <access_token> + x-product-instance-id.
+      const auth = req.headers['authorization'] || '';
+      const pi = req.headers['x-product-instance-id'];
+      if (auth !== 'Bearer sim-access-token' || pi !== 'sim-pi') {
+        return json(res, 401, { errorMsg: 'unauthorized', errorCode: 'InvalidRequest' });
+      }
       if (req.method === 'POST' && url.pathname === '/v2/consents') {
         const data = body ? JSON.parse(body) : {};
         return json(res, 200, {
@@ -93,6 +95,7 @@ before(async () => {
   process.env.WEALTHCORE_SETU_CLIENT_SECRET = 'sim-client-secret';
   process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID = 'sim-pi';
   process.env.WEALTHCORE_SETU_BASE_URL = `http://127.0.0.1:${simPort}`;
+  process.env.WEALTHCORE_SETU_TOKEN_URL = `http://127.0.0.1:${simPort}/auth/token`;
   // Reset the cached config so the server (imported next) picks up the env.
   const { resetConfig } = await import('../server/config.js');
   resetConfig();
