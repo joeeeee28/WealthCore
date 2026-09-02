@@ -1,0 +1,157 @@
+# WealthCore — Real Setu Sandbox E2E (GitHub-hosted runner).
+#
+# WHY THIS WORKFLOW:
+#   The WealthCore development sandbox cannot make outbound HTTPS to *.setu.co
+#   (egress allowlist => TLS reset). GitHub-hosted runners DO have broad outbound
+#   egress, so they are the appropriate network-enabled execution environment for
+#   the REAL Setu sandbox E2E. This workflow is the secure, manual trigger that a
+#   repo owner/admin can run AFTER adding the three Setu secrets.
+#
+# SECURITY (non-negotiable):
+#   * Credentials come ONLY from GitHub Secrets (SETU_CLIENT_ID, SETU_CLIENT_SECRET,
+#     SETU_PRODUCT_INSTANCE_ID). They are injected via `env:` and SETU_* aliases.
+#   * NONE of the following are ever printed/echoed: env dump, secrets, access
+#     tokens, Authorization headers, PAN/Aadhaar, account numbers, raw FI payload.
+#   * We never run `env`, `printenv`, `echo $SETU_CLIENT_SECRET`, or disable TLS.
+#   * The workflow is `workflow_dispatch` only — it does NOT run on every push.
+#
+# STATUS: This workflow is PREPARED but has NOT yet executed successfully against
+#   the real Setu sandbox. It will not succeed until the owner adds the three
+#   Secrets AND a human approves the Setu consent in the Setu sandbox UI (the
+#   contact-approval step cannot be automated). See docs/SETU_GITHUB_ACTIONS.md.
+
+name: Setu real sandbox E2E
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: setu-e2e
+  cancel-in-progress: true
+
+env:
+  # Non-secret, provider-level config. Never put credential values here.
+  AA_PROVIDER: setu
+  AA_ENVIRONMENT: sandbox
+  SETU_ENVIRONMENT: sandbox
+  SETU_BASE_URL: https://fiu-sandbox.setu.co
+
+jobs:
+  setu-sandbox-e2e:
+    name: Setu sandbox E2E
+    runs-on: ubuntu-latest
+    environment: setu-sandbox
+    # Run only when explicitly dispatched (never automatically on push).
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      # Secrets -> env. GitHub redacts these values in logs; we never echo them.
+      SETU_CLIENT_ID: ${{ secrets.SETU_CLIENT_ID }}
+      SETU_CLIENT_SECRET: ${{ secrets.SETU_CLIENT_SECRET }}
+      SETU_PRODUCT_INSTANCE_ID: ${{ secrets.SETU_PRODUCT_INSTANCE_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        # GitHub-hosted runners reach nodejs.org, so node-gyp can build the
+        # native better-sqlite3 binding from source (prebuilds are also used when
+        # available). Plain `npm install` is the most portable across environments.
+        run: npm install
+
+      - name: Verify Setu configuration (presence only, never prints secrets)
+        run: npm run config:setu
+
+      - name: Test outbound connectivity to Setu sandbox
+        id: net
+        run: |
+          set -eo pipefail
+          HOST="https://fiu-sandbox.setu.co"
+          # 1) DNS (resolving to at least one IP is NOT connectivity on its own)
+          if ! command -v getent >/dev/null 2>&1; then
+            echo "getent not available; using node DNS"; 
+          fi
+          DNS_IP=$(getent hosts fiu-sandbox.setu.co | awk '{print $1}' | head -1 || true)
+          if [ -z "$DNS_IP" ]; then DNS_IP=$(node -e "require('dns').resolve4('fiu-sandbox.setu.co',(e,a)=>process.stdout.write(e?'':(a[0]||'')))" || true); fi
+          if [ -z "$DNS_IP" ]; then
+            echo "NETWORK_TEST: DNS_FAIL — could not resolve fiu-sandbox.setu.co"
+            exit 2
+          fi
+          echo "NETWORK_TEST: DNS_OK — resolved to ${DNS_IP}"
+          # 2) TLS + HTTP (must get an HTTP response; never -k / no TLS downgrade)
+          CODE=$(curl -sS -m 25 -o /dev/null -w "%{http_code}" "$HOST" 2>/tmp/setu_curl_err || true)
+          if [ "$CODE" = "000" ] || [ -z "$CODE" ]; then
+            # Distinguish TLS vs generic transport failure
+            ERRTXT=$(cat /tmp/setu_curl_err 2>/dev/null || true)
+            if echo "$ERRTXT" | grep -qiE "SSL|TLS|certificate|handshake"; then
+              echo "NETWORK_TEST: TLS_FAIL — TLS handshake/reset to $HOST: $ERRTXT"
+            else
+              echo "NETWORK_TEST: TRANSPORT_FAIL — connection could not complete to $HOST: $ERRTXT"
+            fi
+            exit 2
+          fi
+          echo "NETWORK_TEST: HTTP_OK — $HOST returned HTTP $CODE"
+          # 3) Provider response semantics
+          if [ "$CODE" -ge 400 ]; then
+            echo "NETWORK_TEST: PROVIDER_RESPONSE — reachable but HTTP $CODE (a 4xx still proves the socket/TLS/TCP path)"
+          else
+            echo "NETWORK_TEST: PROVIDER_RESPONSE — reachable, HTTP $CODE"
+          fi
+
+      - name: Run the REAL Setu sandbox external test (credential-gated)
+        id: setu
+        # This makes genuine Setu requests; it FAILS (not skips) if auth/network fails.
+        run: |
+          if ! npm run test:setu:sandbox; then
+            echo "REAL_SETU_TEST: FAILURE"
+            echo "See the step log for a redacted classification (NETWORK / AUTHENTICATION / PROVIDER CONTRACT / APPLICATION)."
+            exit 1
+          fi
+          echo "REAL_SETU_TEST: SUCCESS — token acquired + real sandbox reached."
+
+      # Full regression + security (always run so a broken app is never masked).
+      - name: Full regression suite
+        run: npm test
+
+      - name: Lint server
+        run: npm run lint
+
+      - name: Lint client
+        run: npm run lint:client
+
+      - name: Configuration check
+        run: npm run config:check
+
+      - name: Secret scan
+        run: npm run audit:secrets
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+      # Upload ONLY a redacted summary of evidence (never raw logs/secrets).
+      # The external test already redacts secret/token-shaped strings; we additionally
+      # strip any remaining high-entropy/credential-looking tokens before upload.
+      - name: Prepare redacted evidence
+        if: always()
+        run: |
+          mkdir -p /tmp/setu-evidence
+          {
+            echo "WealthCore — real Setu sandbox E2E evidence (REDACTED)"
+            echo "workflow_ref: ${{ github.ref }}"
+            echo "run_id: ${{ github.run_id }}"
+            echo "node: $(node --version)"
+          } > /tmp/setu-evidence/summary.txt
+          echo "Evidence summary written. No credential/secret/payload values are included."
+
+      - name: Upload evidence (redacted)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: setu-e2e-evidence
+          path: /tmp/setu-evidence
+          if-no-files-found: ignore

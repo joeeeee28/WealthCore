@@ -104,3 +104,9 @@
 - **New public consent-return route** `GET /api/v1/aa/setu/consent/return?request_id=...` — informational page; the authoritative status change still comes from the verified webhook (no state mutation from untrusted query params).
 - Docs updated (SETU_INTEGRATION, API_SPECIFICATION, SECURITY). `audit:secrets` clean, `npm audit` 0 vulns.
 - **Status: SETU SANDBOX = BLOCKED (ENVIRONMENT NETWORK).** Local simulator E2E still PASS. No fabricated connectivity.
+
+## v1.4.4 — GitHub Actions workflow for real Setu sandbox E2E (network-enabled runner)
+- Added `.github/workflows/setu-e2e.yml`: a `workflow_dispatch`-only workflow that runs on `ubuntu-latest`, injects Setu credentials exclusively via GitHub Secrets (`SETU_CLIENT_ID`, `SETU_CLIENT_SECRET`, `SETU_PRODUCT_INSTANCE_ID`), validates config (`config:setu`), tests outbound connectivity to `fiu-sandbox.setu.co` (DNS/TLS/HTTP, no `curl -k`), runs the genuine `test:setu:sandbox`, then full regression + lint + config + secret scan + dependency audit, and uploads only a redacted evidence summary. Never dumps env, never echoes secrets, never disables TLS.
+- Added `docs/SETU_GITHUB_ACTIONS.md` documenting why GH Actions is required, the three required Secrets, the manual trigger, what the workflow tests, the public webhook/callback requirement, the human Setu-approval step, and the definition of real Setu success.
+- `docs/README.md` updated to link the new doc.
+- **Status: `Setu Sandbox = BLOCKED`** — the workflow is prepared but has NOT executed against real Setu. Repository-owner action required: add the three Secrets and run the workflow; the real full E2E also needs a public inbound HTTPS callback.
