@@ -121,14 +121,16 @@ simulator. Live connectivity requires `WEALTHCORE_SETU_TOKEN` +
 `WEALTHCORE_SETU_PRODUCT_INSTANCE_ID`; production is `PLANNED`. See
 `docs/SETU_INTEGRATION.md`.
 
-### v1.3.1 / v1.4.x — Setu auth model updated to current official (Bearer via getToken)
+### v1.3.1 / v1.4.x — Setu auth model updated to current official (Bearer via Generate Token API)
 Setu authenticates with `Authorization: Bearer <access_token>` + `x-product-instance-id`.
 The access token is acquired from Bridge client credentials
-(`WEALTHCORE_SETU_CLIENT_ID` / `_CLIENT_SECRET`) via the Setu Auth Mechanism / getToken
-(`server/aa/providers/setu-auth.js`); the client secret is **never** sent as an AA request
-header. The adapter and the local simulator assert this model. A credential-gated external
-test (`npm run test:setu:sandbox`) hits the real sandbox and reports
-`BLOCKED — Setu credentials/access not available` when creds are absent. v1.4.x also added
-webhook idempotency + real-notification-contract handling, persistence of the Setu consent
-URL (`consents.consent_url`) and a per-currency net-worth breakdown. See
+(`WEALTHCORE_SETU_CLIENT_ID` / `_CLIENT_SECRET`) via the current official **Generate Token
+API** (`POST https://uat.setu.co/api/v2/auth/token` in sandbox; JSON body `{clientID,
+secret}`, response `data.token`) in `server/aa/providers/setu-auth.js`; the client secret
+is **never** sent as an AA request header. The old OAuth2 form-encoded
+`grant_type=client_credentials` flow is not used. The adapter and the local simulator
+assert this model. A credential-gated external test (`npm run test:setu:sandbox`) hits the
+real sandbox and reports `BLOCKED — network` when egress/credentials are absent. v1.4.x
+also added webhook idempotency + real-notification-contract handling, persistence of the
+Setu consent URL (`consents.consent_url`) and a per-currency net-worth breakdown. See
 `docs/SETU_INTEGRATION.md`.

@@ -132,9 +132,12 @@ target; production requires credentials + onboarding and is never assumed.
 ### v1.3.1 / v1.4.x — Setu auth contract update (current official Bearer model)
 - `server/aa/crypto/setu-crypto.js` emits `Authorization: Bearer <access_token>` +
   `x-product-instance-id`. The access token is acquired from Bridge client credentials
-  via the Setu Auth Mechanism / getToken (`server/aa/providers/setu-auth.js`). The
-  **client secret is used only to acquire the token and is never sent as an AA request
-  header.** (This supersedes the earlier `x-client-id`/`x-client-secret` header model.)
+  via Setu's current official **Generate Token API** (`POST
+  https://uat.setu.co/api/v2/auth/token` in sandbox; JSON `{clientID, secret}`;
+  response `data.token`) in `server/aa/providers/setu-auth.js`. The **client secret is
+  used only to acquire the token and is never sent as an AA request header.** (This
+  supersedes both the earlier `x-client-id`/`x-client-secret` header model and the
+  form-encoded OAuth2 `grant_type=client_credentials` token request.)
 - A credential-gated external integration test
   (`tests/setu-external.test.js`, `npm run test:setu:sandbox`) targets the real sandbox
   using the same Bearer model and is excluded from `npm test`. See `docs/SETU_INTEGRATION.md`.
