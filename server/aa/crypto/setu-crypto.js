@@ -4,12 +4,14 @@
 // FIU — Setu handles the E2E encryption/decryption via its Rahasya key exchange.
 // Therefore no FIU-side decryption is required for the standard JSON path.
 //
-// CURRENT OFFICIAL AUTH MODEL (verified from Setu AA docs):
+// CURRENT OFFICIAL AUTH MODEL (verified from Setu docs):
 //   Bridge provides client_id + client_secret + x-product-instance-id.
-//   Setu AA APIs require `Authorization: Bearer <access_token>` and
-//   `x-product-instance-id`. The access token is obtained via Setu's Auth
-//   Mechanism (getToken) — see setu-auth.js. The client secret is NEVER sent as
-//   a request header on AA APIs; it is used only to acquire the access token.
+//   The access token is obtained from Setu's Generate Token API
+//   (POST https://uat.setu.co/api/v2/auth/token in sandbox) via setu-auth.js.
+//   The response token comes in data.token.
+//   Setu AA APIs then require `Authorization: Bearer <access_token>` and
+//   `x-product-instance-id`. The client secret is NEVER sent as a request
+//   header on AA APIs; it is used only to acquire the access token.
 //
 // This module builds the outbound request headers and verifies webhook
 // signatures. Credentials/tokens are never logged.

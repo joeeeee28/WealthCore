@@ -6,10 +6,11 @@
 > official docs + a bounded local simulator. **Setu TEST credentials are present** and
 > the adapter reports `configured=true` (`npm run config:setu`, `setuCryptoConfig().configured`,
 > `SetuProvider.status()`). **The sole blocker to the REAL external E2E is network egress**:
-> this runtime cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` (an egress
-> allowlist permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host
-> is reset at the transport layer). **Production is PLANNED / BLOCKED BY REGULATORY
-> ONBOARDING** — WealthCore is not an RBI-authorised FIU/AA.
+> this runtime cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` or to
+> the Generate Token API host `https://uat.setu.co` (an egress allowlist permits only
+> `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host is reset at the
+> transport layer). **Production is PLANNED / BLOCKED BY REGULATORY ONBOARDING** —
+> WealthCore is not an RBI-authorised FIU/AA.
 
 ---
 
@@ -25,7 +26,7 @@ SetuProvider (server/aa/providers/setu.js)
    │  POST /v2/consents ; GET /consents/:id ; POST /v2/consents/:id/revoke
    │  POST /sessions  ; GET /sessions/:id
    ▼
-Setu crypto (server/aa/crypto/setu-crypto.js)  — client-credentials + signature verification
+Setu crypto (server/aa/crypto/setu-crypto.js)  — Generate Token API + signature verification
    ▼
 ReBIT normalizer (server/aa/rebit-normalizer.js)  → canonical model
    ▼
@@ -51,18 +52,24 @@ Setu's current AA contract:
 1. The **Setu Bridge** provides **client_id**, **client_secret** and
    **x-product-instance-id** (the Product ID).
 2. The client credentials are used to **acquire an access token** via Setu's
-   **Auth Mechanism / getToken** endpoint (`server/aa/providers/setu-auth.js`).
+   **Generate Token API** (`server/aa/providers/setu-auth.js`):
+   - Sandbox: `POST https://uat.setu.co/api/v2/auth/token`
+   - Production: `POST https://prod.setu.co/api/v2/auth/token`
+   - Request: `Content-Type: application/json`, body
+     `{ "clientID": "<client_id>", "secret": "<client_secret>" }`
+   - Response token: `data.token` (with `data.expiresIn` in seconds)
 3. Every AA API request then sends:
    - `Authorization: Bearer <access_token>`
    - `x-product-instance-id: <product-instance-id>`
 
 The **client secret is never sent as a request header on the AA APIs** — it is used
-only to obtain the access token. WealthCore implements a **Setu Authentication
+only to obtain the access token. The old OAuth2 `grant_type=client_credentials`
+form-encoded flow is **not** used. WealthCore implements a **Setu Authentication
 Manager** (`setu-auth.js`) that caches the token, tracks expiry, renews before
 expiry, serialises concurrent refreshes (no token storm), and invalidates the token
 on a confirmed auth failure. **No credential or token is ever logged.**
 
-Sandbox base: `https://fiu-sandbox.setu.co` · Production: `https://fiu.setu.co`.
+AA base: `https://fiu-sandbox.setu.co` · Production: `https://fiu.setu.co`.
 
 Setu's `format=json` sandbox path returns **decrypted ReBIT JSON** (Setu handles the
 E2E encryption via its key exchange), so no FIU-side decryption is required on the
@@ -104,11 +111,14 @@ SETU_ENVIRONMENT=sandbox
 # Sandbox base URL (configurable, never hard-coded in app code):
 SETU_BASE_URL=https://fiu-sandbox.setu.co        # == WEALTHCORE_SETU_BASE_URL
 # CURRENT OFFICIAL AUTH — client credentials (from the Setu Bridge). Used ONLY to
-# ACQUIRE an access token (Auth Mechanism / getToken), NOT sent as AA headers:
+# ACQUIRE an access token via Generate Token API, NOT sent as AA headers:
 SETU_CLIENT_ID=                                   # == WEALTHCORE_SETU_CLIENT_ID
 SETU_CLIENT_SECRET=                               # == WEALTHCORE_SETU_CLIENT_SECRET  (fresh, regenerated; env-only)
 SETU_PRODUCT_INSTANCE_ID=                         # == WEALTHCORE_SETU_PRODUCT_INSTANCE_ID
-# Override the token endpoint / a legacy short-lived access token (optional):
+# Generate Token API defaults:
+#   sandbox: https://uat.setu.co/api/v2/auth/token
+#   production: https://prod.setu.co/api/v2/auth/token
+# Override the token endpoint (optional); legacy short-lived access token also optional:
 # SETU_TOKEN_URL=                                 # == WEALTHCORE_SETU_TOKEN_URL
 # SETU_TOKEN=
 # Public WealthCore URL Setu can reach for the customer's consent/return journey:
@@ -172,9 +182,10 @@ never silently falls back from production to mock data.
 
 `tests/setu-e2e.test.js` spins a **bounded local Setu simulator** that mirrors the
 documented v2 endpoints and asserts the **current official auth model** is used: the
-token endpoint `/auth/token` is exercised, and every AA request carries
-`Authorization: Bearer <access_token>` + `x-product-instance-id` (the client secret is
-**never** sent as an AA request header). It verifies the full WealthCore flow:
+Generate Token API (`POST /api/v2/auth/token`, JSON `clientID`/`secret`, response
+`data.token`) is exercised, and every AA request carries `Authorization: Bearer
+<access_token>` + `x-product-instance-id` (the client secret is **never** sent as an
+AA request header). It verifies the full WealthCore flow:
 `connect-setu → approve → sync → accounts+transactions persisted → dashboard updated →
 idempotent re-sync → webhook (real Setu payload shape) updates consent state → webhook
 replay is idempotent`.
@@ -207,15 +218,18 @@ prevents the real external E2E.
 - `getAccessToken()` — acquires + caches a token, renews before expiry, serialises
   concurrent refreshes, retries once on a confirmed auth failure.
 - `invalidateAccessToken(clientId)` — clears a cached token.
-- `setuTokenEndpoint()` — resolves the token URL (`WEALTHCORE_SETU_TOKEN_URL` if set,
-  else `<base>/auth/token`); `setuTokenRequest()` — builds the OAuth2 client-credentials
-  request (`grant_type=client_credentials` + `client_id` + `client_secret`).
+- `setuTokenEndpoint()` — resolves the Generate Token API URL
+  (`WEALTHCORE_SETU_TOKEN_URL` if set, else
+  `https://uat.setu.co/api/v2/auth/token` in sandbox /
+  `https://prod.setu.co/api/v2/auth/token` in production).
+- `setuTokenRequest()` — builds the current official JSON request
+  (`{clientID, secret}`, `Content-Type: application/json`). The old OAuth2
+  `grant_type=client_credentials` form-encoded flow is **not** used.
+- `fetchToken()` — reads the access token from `data.token` and `expiresIn`
+  from `data.expiresIn` (defaults to a conservative 25-minute cache lease when
+  expiry is absent).
 
-`PENDING SETU DOCUMENTATION CONFIRMATION`: the exact getToken wire format
-(form-encoded `grant_type=client_credentials` vs Basic auth / other) and the exact
-token endpoint path are isolated behind `setuTokenEndpoint()`/`setuTokenRequest()` and
-are **not guessed** — they are configurable via `WEALTHCORE_SETU_TOKEN_URL`. The
-webhook **signature algorithm** is also not published on Setu's AA Notifications doc, so
+The webhook **signature algorithm** is not published on Setu's AA Notifications doc, so
 signature verification is **best-effort/optional defence-in-depth** (enforced only when
 `WEALTHCORE_SETU_WEBHOOK_SECRET` is configured); it is never treated as a hard gate on a
 provider whose docs omit it.
@@ -267,17 +281,17 @@ this table is a snapshot, not an ongoing binding.
 |----------|--------|
 | Mock AA | IMPLEMENTED |
 | Setu adapter (contract) | IMPLEMENTED against current official Setu auth + v2 endpoints |
-| Setu sandbox external E2E | **BLOCKED — ENVIRONMENT NETWORK** (credentials OK; runtime cannot reach fiu-sandbox.setu.co — see §12) |
+| Setu sandbox external E2E | **BLOCKED — ENVIRONMENT NETWORK** (credentials OK; runtime cannot reach fiu-sandbox.setu.co or uat.setu.co — see §12) |
 | Setu production | PLANNED / BLOCKED BY REGULATORY ONBOARDING |
 
 ## 11. Remaining external dependencies
 
-- **Network egress to `https://fiu-sandbox.setu.co`** — the **only** blocker to the real
-  external test. The runtime must run where it can reach Setu (this sandbox's egress
-  allowlist blocks every `*.setu.co` host at the TLS layer; no proxy is configured). No
-  application/config change can fix this.
+- **Network egress to `https://fiu-sandbox.setu.co` and `https://uat.setu.co`** — the
+  **only** blocker to the real external test. The runtime must run where it can reach
+  Setu (this sandbox's egress allowlist blocks every `*.setu.co` host at the TLS layer; no
+  proxy is configured). No application/config change can fix this.
 - Setu sandbox access/product configuration (`support@setu.co` / `aa@setu.co`) to run
-  `test:setu:sandbox`, and to confirm the exact getToken wire format/path (see §7).
+  `test:setu:sandbox`.
 - Production: FIU eligibility / TSP arrangement, Sahamati certification, central
   registry, production credentials.
 
@@ -291,7 +305,7 @@ this table is a snapshot, not an ongoing binding.
 | `npm run config:setu` | `SETU_CLIENT_ID: configured` · `SETU_CLIENT_SECRET: configured` · `SETU_PRODUCT_INSTANCE_ID: configured` · `SETU_BASE_URL: configured` · `configured: true` (no secret leaked) |
 | `setuCryptoConfig().configured` | `true` |
 | Setu provider `status()` | `configured=true, mode=sandbox, environment=SANDBOX, requiresCredentials=false`, product `Account Aggregator Data` |
-| Sandbox network egress from this environment | **BLOCKED** — `https://fiu-sandbox.setu.co` is unreachable. DNS resolves to `13.205.36.27`, but the **TLS Client hello is reset** at the transport layer (`OpenSSL SSL_connect: SSL_ERROR_SYSCALL`). An **egress allowlist** permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host is blocked. No proxy is configured, so this cannot be fixed from within the application. |
+| Sandbox network egress from this environment | **BLOCKED** — `https://fiu-sandbox.setu.co` and the Generate Token API host `https://uat.setu.co` are unreachable. The **TLS Client hello is reset** at the transport layer (`OpenSSL SSL_connect: SSL_ERROR_SYSCALL`). An **egress allowlist** permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host is blocked. No proxy is configured, so this cannot be fixed from within the application. |
 | `npm run test:setu:sandbox` | **BLOCKED — NETWORK.** With credentials present the test now **attempts** the real connection and fails cleanly with `PROVIDER_UNAVAILABLE` ("Setu token endpoint unreachable") — it does **not** skip and does **not** fabricate a pass. |
 | External Setu sandbox reached / authenticated | **NO** (network egress block; credentials verified by `config:setu` + provider `status()`, not by a live call) |
 | Local simulator E2E (credential-free) | **PASS** — verifies current Bearer auth + full WealthCore flow + webhook (real payload shape, idempotent) |
@@ -304,17 +318,19 @@ this table is a snapshot, not an ongoing binding.
 `configured=true` (verified by `npm run config:setu`, `setuCryptoConfig().configured`,
 and `SetuProvider.status()` — all showing presence, never the secret value). The
 **sole remaining blocker for the REAL external E2E is network egress**: this runtime
-cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` (an egress allowlist
-permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host and
+cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` or to the Generate
+Token API host `https://uat.setu.co` (an egress allowlist permits only
+`registry.npmjs.org` and `api.github.com`; every `*.setu.co` host and
 `raw.githubusercontent.com` are reset at the transport layer). With credentials present,
 `npm run test:setu:sandbox` now attempts the real connection and fails cleanly with
 `STATUS: BLOCKED — NETWORK` (it does **not** skip and does **not** fabricate a pass).
 
 To run the real external sandbox test, keep the credentials in the environment (never
-commit) and **run it in a deployment whose network can reach `https://fiu-sandbox.setu.co`**,
-then `npm run test:setu:sandbox`. Everything the adapter needs is already wired: the Setu
-product is `Account Aggregator Data` (TEST/SANDBOX), product instance id
-`a068da97-a7d8-4ed0-a7bd-764d00fbde68` is sent as `x-product-instance-id` (non-secret).
+commit) and **run it in a deployment whose network can reach `https://fiu-sandbox.setu.co`
+and `https://uat.setu.co`**, then `npm run test:setu:sandbox`. Everything the adapter
+needs is already wired: the Setu product is `Account Aggregator Data` (TEST/SANDBOX),
+product instance id `a068da97-a7d8-4ed0-a7bd-764d00fbde68` is sent as
+`x-product-instance-id` (non-secret).
 
 A public Setu **consent-return** route was added at `GET /api/v1/aa/setu/consent/return`
 (informational only; the authoritative status change comes from the verified webhook), and
@@ -331,7 +347,7 @@ both `SETU_*` and `WEALTHCORE_SETU_*`), so it attempts rather than skips when cr
 | Setu data APIs | https://docs.setu.co/data/account-aggregator/api-integration/data-apis | POST /sessions, GET /sessions/:id, PARTIAL/COMPLETED | 2026-09 | Data session |
 | Setu account availability | https://docs.setu.co/data/account-aggregator/api-integration/account-availability-apis | POST /v2/account-availability, Bearer auth | 2026-09 | Account discovery |
 | Setu notifications / webhooks | https://docs.setu.co/data/account-aggregator/api-integration/notifications | Webhook payloads (`data.status`, CONSENT_STATUS_UPDATE / SESSION_STATUS_UPDATE) | 2026-09 | Webhook |
-| Setu API reference (Auth Mechanism / getToken) | https://docs.setu.co/data/account-aggregator/api-reference#/operation~getToken | Token acquisition for `Authorization: Bearer` | 2026-09 | Authentication |
+| Setu Generate Token API (OAuth) | https://docs.setu.co/dev-tools/bridge/v1/org-settings/api-keys/oauth | Token acquisition for `Authorization: Bearer` (`POST /api/v2/auth/token`, `data.token`) | 2026-09 | Authentication |
 | Setu multi-AA / consent object | https://docs.setu.co/data/account-aggregator/consent-object | Consent params (purpose, FI types, duration, fetch type) | 2026-09 | Consent |
 | Setu support FAQ | https://support.setu.co/support/solutions/81000205398 | Bridge sandbox credentials | 2026-09 | Onboarding |
 | RBI NBFC-AA Master Direction | (RBI Master Direction NBFC-Account Aggregator) | Consent, no customer auth credentials | 2026-09 | Regulatory |
