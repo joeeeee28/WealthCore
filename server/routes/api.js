@@ -326,6 +326,24 @@ router.post('/aa/webhook/setu', async (req, res) => {
   }
 });
 
+// ---- Setu consent return (public — browser lands here after the Setu consent
+// journey; informational only). The authoritative consent status change comes
+// from the verified webhook (/aa/webhook/setu), so this never mutates state
+// from query params (unspoofable) and never logs secrets/tokens.
+router.get('/aa/setu/consent/return', (req, res) => {
+  // Only non-sensitive, non-authoritative ids are read; no secret, no payload.
+  const requestId = String(req.query.request_id || req.query.consentId || req.query.id || '').slice(0, 80);
+  if (requestId) audit(null, 'aa.setu.consent_return', `consent=${requestId}`, req.ip);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WealthCore — Consent</title>
+<style>body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.card{background:#1e293b;padding:32px 40px;border-radius:16px;max-width:420px;text-align:center}h1{font-size:20px;margin:0 0 8px}p{color:#94a3b8;font-size:14px;line-height:1.5}</style>
+</head><body><div class="card"><h1>Consent received</h1><p>You can now close this window and return to WealthCore. Your consent status will update via the secure notification. Open <strong>Integrations</strong> to review and synchronise your accounts.</p></div></body></html>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200).send(html);
+});
+
 // ---- Everything below requires auth ----
 router.use(requireAuth);
 

@@ -84,6 +84,20 @@ Set/replace app-lock PIN (4–6 digits). 200 `{ ok: true }`.
 - `POST /aa/consent/:id/approve|reject|revoke` → `{ consent }`; 400 `BAD_STATE`
 - `POST /aa/consent/:id/request-data` → `FAILED|IN_PROGRESS` (honest)
 - `GET /sync/runs` → recent sync attempts.
+- `GET /aa/providers` → `{ providers[], active }` — each provider carries `status()` (configured, mode, environment, and for Setu the non-sensitive `product` + `productInstanceId`).
+- `POST /aa/connect-setu` `{ fiType?, fiTypes?, purpose?, dataRange?, frequency?, customerHandle? }` → `{ consent, provider, mode, redirectUrl, consentUrl }`
+- `GET /aa/sessions` → recent FI data sessions.
+- `POST /aa/webhook/setu` — **public** Setu notification callback (see §Webhooks).
+- `GET /aa/setu/consent/return?request_id=...` — **public** informational consent-return page (browser lands here after the Setu consent journey; status changes come from the verified webhook, not this route).
+- `POST /aa/setu/availability` `{ mobileNumber }` → `{ accounts[], traceId }` (Setu account availability).
+
+## Webhooks (Setu AA)
+
+`POST /aa/webhook/setu` is a public provider callback (Setu calls it server-to-server; it must not require a user session). It is signature-checked when `SETU_WEBHOOK_SECRET` is configured, is **idempotent** per `notification_id` (`webhook_notifications`), and audits each receipt without storing raw payloads.
+
+- Setu consent notification: `{ type: "CONSENT_STATUS_UPDATE", consentId, notificationId, data: { status } }` → status under `data.status` (`ACTIVE|REJECTED|REVOKED|PAUSED|EXPIRED`).
+- Setu session notification: `{ type: "SESSION_STATUS_UPDATE", consentId, dataSessionId, data: { status } }` → `data.status` (`PENDING|PARTIAL|COMPLETED|EXPIRED|FAILED`).
+- Returns `200 { ok: true }` (or `{ ok: true, idempotent: true }` on a duplicate), `400` on a malformed/rejected payload. `GET /aa/setu/consent/return` is a separate informational page.
 
 ## Calculators (deterministic)
 

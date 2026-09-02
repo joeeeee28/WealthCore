@@ -1,19 +1,15 @@
 # WealthCore — Setu Account Aggregator Integration
 
-> **Status: PARTIALLY IMPLEMENTED.** The Setu sandbox **contract** (auth, consent,
-> webhook, data-session, ReBIT→canonical normalisation, persistence, idempotency) is
-> wired and verified against the current official docs + a bounded local simulator.
-> **Real external sandbox connectivity is BLOCKED** in this environment for two
-> independent reasons: (1) no `.env`/secret (`SETU_CLIENT_SECRET` must be a freshly
-> regenerated TEST secret, env-only) and (2) **no network egress to `setu.co`** (the
-> runtime cannot complete a TLS handshake to `https://fiu-sandbox.setu.co`).
-> **Production is PLANNED / BLOCKED BY REGULATORY ONBOARDING** — WealthCore is not an
-> RBI-authorised FIU/AA.
->
-> Setu is the first **real** external AA provider wired into WealthCore's
-> provider-neutral layer. The adapter follows the **current official Setu
-> authentication contract**; **no live Setu connectivity is claimed** because no
-> Setu sandbox credentials are present in this environment.
+> **Status: PARTIALLY IMPLEMENTED — SETU SANDBOX = BLOCKED (ENVIRONMENT NETWORK).**
+> The Setu sandbox **contract** (auth, consent, webhook, data-session, ReBIT→canonical
+> normalisation, persistence, idempotency) is wired and verified against the current
+> official docs + a bounded local simulator. **Setu TEST credentials are present** and
+> the adapter reports `configured=true` (`npm run config:setu`, `setuCryptoConfig().configured`,
+> `SetuProvider.status()`). **The sole blocker to the REAL external E2E is network egress**:
+> this runtime cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` (an egress
+> allowlist permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host
+> is reset at the transport layer). **Production is PLANNED / BLOCKED BY REGULATORY
+> ONBOARDING** — WealthCore is not an RBI-authorised FIU/AA.
 
 ---
 
@@ -189,10 +185,13 @@ replay is idempotent`.
 `https://fiu-sandbox.setu.co` endpoint. It is **not** part of `npm test` (which stays
 credential-free) and it **aborts/skips** if no real Setu credentials are present.
 
-**Result in this environment: `BLOCKED — Real Setu sandbox credentials/access are not
-available.`** Setu is therefore **not** reported as `configured=true`, and no external
-connectivity is claimed. The adapter is contract-complete and simulator-verified;
-only the missing credentials prevent the real external E2E.
+**Result in this environment: `BLOCKED — NETWORK`.** With credentials present the test
+resolves them through the app config and **attempts** the real connection; the runtime
+cannot reach the Setu token endpoint, so it fails cleanly with `PROVIDER_UNAVAILABLE`
+("Setu token endpoint unreachable") and reports `STATUS: BLOCKED — NETWORK`. It does
+**not** skip and does **not** fabricate a pass. The adapter is contract-complete, claims
+`configured=true` (presence-based), and is simulator-verified; only the network egress
+prevents the real external E2E.
 
 ## 7. Crypto & auth abstraction
 
@@ -268,17 +267,17 @@ this table is a snapshot, not an ongoing binding.
 |----------|--------|
 | Mock AA | IMPLEMENTED |
 | Setu adapter (contract) | IMPLEMENTED against current official Setu auth + v2 endpoints |
-| Setu sandbox external E2E | **BLOCKED** — secret not in env AND no network egress to setu.co (see §12) |
+| Setu sandbox external E2E | **BLOCKED — ENVIRONMENT NETWORK** (credentials OK; runtime cannot reach fiu-sandbox.setu.co — see §12) |
 | Setu production | PLANNED / BLOCKED BY REGULATORY ONBOARDING |
 
 ## 11. Remaining external dependencies
 
-- **`SETU_CLIENT_SECRET`** — the previously exposed TEST secret must be **regenerated in
-  the Setu Bridge** and supplied only as an env var (never committed).
-- **Network egress to `https://fiu-sandbox.setu.co`** — the real external test must run
-  in an environment that can reach Setu (this sandbox's TLS handshake is reset).
+- **Network egress to `https://fiu-sandbox.setu.co`** — the **only** blocker to the real
+  external test. The runtime must run where it can reach Setu (this sandbox's egress
+  allowlist blocks every `*.setu.co` host at the TLS layer; no proxy is configured). No
+  application/config change can fix this.
 - Setu sandbox access/product configuration (`support@setu.co` / `aa@setu.co`) to run
-  `test:setu:sandbox`.
+  `test:setu:sandbox`, and to confirm the exact getToken wire format/path (see §7).
 - Production: FIU eligibility / TSP arrangement, Sahamati certification, central
   registry, production credentials.
 
@@ -286,39 +285,41 @@ this table is a snapshot, not an ongoing binding.
 
 | Check | Result |
 |-------|--------|
-| Setu **client_id** present in env as non-secret config | **YES** (wired; `SETU_CLIENT_ID` resolves to `config().setu.clientId`) |
-| Setu **product_instance_id** present (non-secret) | **YES** (`SETU_PRODUCT_INSTANCE_ID` set; sent as `x-product-instance-id`) |
-| Setu **client_secret** present | **NO** — `SETU_CLIENT_SECRET` not set (must be the **fresh regenerated** TEST secret, env-only) |
-| `npm run config:setu` | Reports `SETU_CLIENT_ID: configured`, `SETU_PRODUCT_INSTANCE_ID: configured`, `SETU_CLIENT_SECRET: NOT SET`, `MISSING: SETU_CLIENT_SECRET`, `configured: false` (no secret leaked) |
-| `setuCryptoConfig().configured` | `false` (correct — secret absent) |
-| Setu provider `status()` | `configured=false, mode=sandbox, environment=SANDBOX, requiresCredentials=true` (honest) |
-| Sandbox network egress from this environment | **BLOCKED** — `https://fiu-sandbox.setu.co` is unreachable (DNS resolves, TLS handshake reset: `OpenSSL SSL_connect: SSL_ERROR_SYSCALL`). Runtime `fetch` to it errors. |
-| `npm run test:setu:sandbox` | **BLOCKED — Real Setu sandbox credentials/access are not available.** (test SKIPped) |
-| External Setu sandbox reached / authenticated | **NO** (no egress AND no secret) |
+| Setu **client_id** present in env as non-secret config | **YES** (`SETU_CLIENT_ID` resolves to `config().setu.clientId`) |
+| Setu **product_instance_id** present (non-secret) | **YES** (`SETU_PRODUCT_INSTANCE_ID` resolved; verified the adapter would send `x-product-instance-id: a068da97-a7d8-4ed0-a7bd-764d00fbde68`) |
+| Setu **client_secret** present (secure env) | **YES** — provided via runtime env only (never printed, never in repo) |
+| `npm run config:setu` | `SETU_CLIENT_ID: configured` · `SETU_CLIENT_SECRET: configured` · `SETU_PRODUCT_INSTANCE_ID: configured` · `SETU_BASE_URL: configured` · `configured: true` (no secret leaked) |
+| `setuCryptoConfig().configured` | `true` |
+| Setu provider `status()` | `configured=true, mode=sandbox, environment=SANDBOX, requiresCredentials=false`, product `Account Aggregator Data` |
+| Sandbox network egress from this environment | **BLOCKED** — `https://fiu-sandbox.setu.co` is unreachable. DNS resolves to `13.205.36.27`, but the **TLS Client hello is reset** at the transport layer (`OpenSSL SSL_connect: SSL_ERROR_SYSCALL`). An **egress allowlist** permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host is blocked. No proxy is configured, so this cannot be fixed from within the application. |
+| `npm run test:setu:sandbox` | **BLOCKED — NETWORK.** With credentials present the test now **attempts** the real connection and fails cleanly with `PROVIDER_UNAVAILABLE` ("Setu token endpoint unreachable") — it does **not** skip and does **not** fabricate a pass. |
+| External Setu sandbox reached / authenticated | **NO** (network egress block; credentials verified by `config:setu` + provider `status()`, not by a live call) |
 | Local simulator E2E (credential-free) | **PASS** — verifies current Bearer auth + full WealthCore flow + webhook (real payload shape, idempotent) |
 | Webhook consent-status contract (`payload.data.status`) | **FIXED** to Setu's real notification shape (was reading a non-existent top-level `status`) |
 | Webhook idempotency | **ADDED** (`webhook_notifications` table, one process per notification id) |
 | Consent URL persisted + surfaced | **ADDED** (`consents.consent_url`; Integrations screen "Open consent") |
 | Multi-currency exposure | **ADDED** per-currency breakdown in net worth (`currencyBreakdown`, `mixedCurrency`) — no silent FX mixing claim |
 
-**Conclusion: Setu external sandbox connectivity is BLOCKED for TWO independent
-reasons in this environment:**
-1. **No `.env`/secret** — `SETU_CLIENT_SECRET` is absent (the previous TEST secret was
-   exposed and must be **regenerated**; only the fresh value in `process.env` may be used).
-2. **No network egress to Setu** — the runtime cannot complete a TLS handshake to
-   `https://fiu-sandbox.setu.co` (DNS resolves to `13.205.36.27` but the connection is
-   reset at the transport layer). This must be run in an environment that can reach Setu.
+**Conclusion: the Setu TEST credentials are now present and the adapter reports
+`configured=true` (verified by `npm run config:setu`, `setuCryptoConfig().configured`,
+and `SetuProvider.status()` — all showing presence, never the secret value). The
+**sole remaining blocker for the REAL external E2E is network egress**: this runtime
+cannot complete a TLS handshake to `https://fiu-sandbox.setu.co` (an egress allowlist
+permits only `registry.npmjs.org` and `api.github.com`; every `*.setu.co` host and
+`raw.githubusercontent.com` are reset at the transport layer). With credentials present,
+`npm run test:setu:sandbox` now attempts the real connection and fails cleanly with
+`STATUS: BLOCKED — NETWORK` (it does **not** skip and does **not** fabricate a pass).
 
-The adapter and simulator E2E are complete and contract-correct; only the credential-gated,
-egress-enabled external step is held. This is the honest state — no fabricated connectivity,
-no simulator passed off as real Setu.
-
-To run the real external sandbox test, provide (never commit):
-`SETU_CLIENT_ID`, the **fresh regenerated** `SETU_CLIENT_SECRET`, `SETU_PRODUCT_INSTANCE_ID`,
-set `AA_PROVIDER=setu`, `AA_ENVIRONMENT=sandbox`, and ensure the environment has network
-access to `https://fiu-sandbox.setu.co`, then run `npm run test:setu:sandbox`. The Setu
-product is `Account Aggregator Data` (TEST/SANDBOX); product instance id
+To run the real external sandbox test, keep the credentials in the environment (never
+commit) and **run it in a deployment whose network can reach `https://fiu-sandbox.setu.co`**,
+then `npm run test:setu:sandbox`. Everything the adapter needs is already wired: the Setu
+product is `Account Aggregator Data` (TEST/SANDBOX), product instance id
 `a068da97-a7d8-4ed0-a7bd-764d00fbde68` is sent as `x-product-instance-id` (non-secret).
+
+A public Setu **consent-return** route was added at `GET /api/v1/aa/setu/consent/return`
+(informational only; the authoritative status change comes from the verified webhook), and
+the external-test harness was fixed to resolve credentials through the app config (honouring
+both `SETU_*` and `WEALTHCORE_SETU_*`), so it attempts rather than skips when creds are set.
 
 ## 13. Source register (official resources used)
 

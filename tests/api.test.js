@@ -115,6 +115,16 @@ test('AA integration honestly reports READY_FOR_CONFIGURATION', async () => {
   assert.match(status.json.status, /credentials required/i);
 });
 
+test('Setu consent-return route is public and returns an informational page', async () => {
+  const res = await fetch(base + '/aa/setu/consent/return?request_id=abc123', { method: 'GET' });
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /Consent received/i);
+  assert.match(html, /return to WealthCore/i);
+  // No secret/token in the page, and it must not require auth (no bearer header sent).
+  assert.ok(!/Authorization|Bearer|token:/.test(html));
+});
+
 test('export produces JSON and CSV data', async () => {
   const jsonExp = await req('GET', '/export.json', null, token);
   assert.equal(jsonExp.status, 200);

@@ -11,24 +11,41 @@
 // The client secret is NEVER sent as an AA request header.
 //
 // If credentials are absent it reports BLOCKED and skips WITHOUT fabricating any
-// connectivity. No secrets are ever printed.
+// connectivity. Credentials are resolved through the app's own config (which
+// honours BOTH the `SETU_*` aliases and the `WEALTHCORE_SETU_*` canonical names).
+// No secrets are ever printed.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { config, resetConfig } from '../server/config.js';
 
-const clientId = process.env.WEALTHCORE_SETU_CLIENT_ID || '';
-const clientSecret = process.env.WEALTHCORE_SETU_CLIENT_SECRET || '';
-const productInstanceId = process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID || '';
-const baseUrl = process.env.WEALTHCORE_SETU_BASE_URL || 'https://fiu-sandbox.setu.co';
+// Resolve credentials through the app's config layer, which reads both env
+// namespaces. Do NOT print clientSecret / token values anywhere.
+function setuCfg() {
+  resetConfig();
+  const s = config().setu || {};
+  return {
+    clientId: s.clientId || '',
+    clientSecret: s.clientSecret || '',
+    productInstanceId: s.productInstanceId || '',
+    baseUrl: s.baseUrl || 'https://fiu-sandbox.setu.co',
+  };
+}
+
+const cfg = setuCfg();
+const clientId = cfg.clientId;
+const clientSecret = cfg.clientSecret;
+const productInstanceId = cfg.productInstanceId;
+const baseUrl = cfg.baseUrl;
 const hasCreds = Boolean(clientId && clientSecret && productInstanceId);
 
 function credsAvailable() {
   if (!hasCreds) {
     console.error('BLOCKED — Real Setu sandbox credentials/access are not available.');
     console.error('Set the following to run the real external sandbox integration test:');
-    console.error('  WEALTHCORE_SETU_CLIENT_ID   (Setu Bridge client id)');
-    console.error('  WEALTHCORE_SETU_CLIENT_SECRET(Setu Bridge client secret — used ONLY to fetch the token)');
-    console.error('  WEALTHCORE_SETU_PRODUCT_INSTANCE_ID (Setu Bridge product instance id)');
+    console.error('  SETU_CLIENT_ID   (or WEALTHCORE_SETU_CLIENT_ID) — Setu Bridge client id');
+    console.error('  SETU_CLIENT_SECRET(or WEALTHCORE_SETU_CLIENT_SECRET) — used ONLY to fetch the token');
+    console.error('  SETU_PRODUCT_INSTANCE_ID (or WEALTHCORE_SETU_PRODUCT_INSTANCE_ID) — product id');
     console.error('See docs/SETU_INTEGRATION.md. Do NOT commit real credentials.');
     return false;
   }
@@ -53,7 +70,15 @@ test('REAL Setu sandbox connectivity (Bearer auth)', { skip: !credsAvailable() }
   try {
     token = await getAccessToken();
   } catch (e) {
-    console.error(`AUTH RESULT: FAILED — ${e.code || e.message} (token acquisition from Setu did not succeed).`);
+    // Distinguish BLOCKED-by-network from credential rejection. Never print a secret.
+    const code = e.code || '';
+    const msg = String(e.message || e).replace(/\b(SETU_CLIENT_SECRET|client_secret|Authorization|Bearer [A-Za-z0-9._-]{4,})/gi, 'REDACTED');
+    console.error(`AUTH RESULT: FAILED — code=${code} message=${msg}`);
+    if (code === 'PROVIDER_UNAVAILABLE' || code === 'FETCH_TIMEOUT') {
+      console.error('STATUS: BLOCKED — NETWORK. The runtime could not reach the Setu token endpoint (check egress/firewall).');
+    } else {
+      console.error('STATUS: BLOCKED — AUTHENTICATION. Setu rejected the credentials/token endpoint.');
+    }
     throw e;
   }
   assert.ok(token && String(token).length > 0, 'Setu access token was not acquired.');
