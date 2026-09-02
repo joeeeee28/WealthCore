@@ -29,8 +29,11 @@ A security review of the WealthCore build. Scope: authentication, authorization,
 
 ## Secrets management
 
-- **No secrets in source.** Verified with a scan for `API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE_KEY` across `server/` and `public/` — no hard-coded literals found.
-- Provider credentials are read from environment variables only (`WEALTHCORE_AA_*`, `WEALTHCORE_MARKET_*`).
+- **No secrets in source.** Verified with a scan for `API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE_KEY` across `server/` and `public/` — no hard-coded literals found (`npm run audit:secrets`).
+- Provider credentials are read from environment variables only (`WEALTHCORE_AA_*`, `WEALTHCORE_MARKET_*`, `SETU_*` / `WEALTHCORE_SETU_*`).
+- **`.env` is gitignored**; only `.env.example` (placeholders) is committed. In this build there is no secret value in the repo, no secret in Git history, and no secret in the frontend bundle.
+- **Setu TEST secret**: if a secret has been exposed, **rotate it in the Setu Bridge** and store only the fresh value as `SETU_CLIENT_SECRET` (env-only). Never hard-code it, print it, or add it to a `console.log`/API response. `npm run config:setu` reports only presence (``) — never the value.
+- **Never sent as an AA header**: the client secret is used only to acquire an access token via Setu's Auth Mechanism/getToken; AA requests carry `Authorization: Bearer <token>` + `x-product-instance-id`.
 
 ## XSS / CSRF / injection / rate limiting
 

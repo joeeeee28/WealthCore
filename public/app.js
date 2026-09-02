@@ -787,8 +787,9 @@ async function viewIntegrations() {
     <div id="integ-body"><div class="skeleton" style="height:200px"></div></div>`;
   const [{ data }, { data: market }, { data: cfgF }, { data: prov }] = await Promise.all([api('/aa/status'), api('/market/status'), api('/config'), api('/aa/providers')]);
   const providers = prov.providers || [];
-  const modeLabel = (m) => m === 'MOCK' ? 'Demo / Simulation' : m === 'SANDBOX' ? 'Sandbox / UAT' : m === 'PRODUCTION' ? 'Production' : m;
-  const modeChip = (m) => m === 'MOCK' ? 'purple' : m === 'SANDBOX' ? 'blue' : m === 'PRODUCTION' ? 'green' : 'gray';
+  // Normalise to uppercase so lowercase modes (e.g. setu's 'sandbox') label correctly.
+  const modeLabel = (m) => { const u = String(m || '').toUpperCase(); return u === 'MOCK' ? 'Demo / Simulation' : u === 'SANDBOX' ? 'Sandbox / UAT' : u === 'PRODUCTION' ? 'Production' : String(m || ''); };
+  const modeChip = (m) => { const u = String(m || '').toUpperCase(); return u === 'MOCK' ? 'purple' : u === 'SANDBOX' ? 'blue' : u === 'PRODUCTION' ? 'green' : 'gray'; };
   const soa = ({ integration, status, provider, mode, configured }) => `
     <div class="card"><div class="section-title">Account Aggregator (FIU)</div>
       <div class="kpi"><span class="label">Integration</span><span class="value">${esc(integration)}</span></div>
@@ -797,11 +798,26 @@ async function viewIntegrations() {
       <p class="small muted mt">${configured ? `Provider: ${esc(provider)} (${esc(mode)})` : 'To go live, supply FIU provider credentials (client id, secret, base URL). No live data is fetched or claimed until then.'}</p>
       <div class="row mt"><button class="btn primary sm" data-action="connect-aa">Connect financial accounts</button></div>
     </div>`;
+  // Setu provider detail (non-secret fields only: product, product instance id,
+  // environment, connection status). The client secret/access token are NEVER shown.
+  const setu = providers.find((p) => p.name === 'setu');
+  const setuCard = setu ? `
+    <div class="card"><div class="section-title">Setu (AA Gateway)</div>
+      <div class="kpi"><span class="label">Environment</span><span class="value">${esc(modeLabel(setu.status.mode))}</span></div>
+      <div class="kpi mt"><span class="label">Product</span><span class="value">${esc(setu.status.product || 'Account Aggregator Data')}</span></div>
+      ${setu.status.productInstanceId ? `<div class="small muted mt">Product instance ID: <code>${esc(setu.status.productInstanceId)}</code></div>` : ''}
+      <div class="chip ${setu.configured ? 'green' : 'amber'} mt">${setu.configured ? 'CONFIGURED' : 'NOT_CONFIGURED'}</div>
+      <p class="small muted mt">${esc(setu.status.detail || '')}</p>
+      <div class="row mt"><button class="btn primary sm" data-action="connect-aa">Connect Setu (sandbox)</button></div>
+    </div>` : '';
   const consents = data.consents || [];
   w.innerHTML = `<div class="topbar"><div><h1>Integrations</h1><div class="sub">Account Aggregator, consents, market data & AI provider state</div></div></div>
     ${providers.length ? `<div class="alert info"><b>Providers</b> — ${providers.map((p) => `<span class="chip ${modeChip(p.status.mode)}">${esc(p.name)} · ${esc(modeLabel(p.status.mode))}</span>`).join(' ')}. Imports from the demo provider are <b>TEST DATA — NOT REAL FINANCIAL DATA</b>.</div>` : ''}
     <div class="grid c2">
-      ${soa(data)}
+      <div>
+        ${soa(data)}
+        ${setuCard}
+      </div>
       <div class="card"><div class="section-title">Consents</div><div id="consent-list">${consents.length ? consents.map((c) => consentRow(c)).join('') : `<div class="empty">No consents yet. Connect an account to start.</div>`}</div>
       <button class="btn primary sm mt" data-action="connect-aa">+ Connect financial account</button></div>
     </div>
@@ -877,7 +893,7 @@ async function openAAConnect() {
   catch (e) { toast(e.message, 'error'); return; }
   modal(`<span class="close" data-close>×</span><h3>Connect financial accounts</h3><p class="lead">Choose an Account Aggregator provider. The demo provider runs fully locally with synthetic data.</p>
     <form id="connect-form">
-      <div class="field"><label>Provider</label><select name="provider">${list.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(p.status.mode === 'MOCK' ? 'Demo / Simulation' : p.status.mode === 'SANDBOX' ? 'Sandbox / UAT' : p.status.mode === 'PRODUCTION' ? 'Production' : p.status.mode)}</option>`).join('')}</select></div>
+      <div class="field"><label>Provider</label><select name="provider">${list.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(modeLabel(p.status.mode))}</option>`).join('')}</select></div>
       <div class="field"><label>Data to request</label><select name="fiType">${['DEPOSIT','EQUITIES','MUTUAL_FUNDS','BONDS','INSURANCE_POLICIES','GOLD','NPS'].map((t) => `<option value="${t}">${t.replace('_',' ')}</option>`).join('')}</select></div>
       <div class="field"><label>Purpose</label><input class="input" name="purpose" value="Personal financial management" required /></div>
       <div class="field"><label>Customer handle (optional)</label><input class="input" name="customerHandle" placeholder="e.g. demo@mock" /></div>

@@ -231,6 +231,10 @@ export const SetuProvider = {
       mode: env === PRODUCTION ? PRODUCTION : SANDBOX,
       requiresCredentials: !configured,
       environment: env === PRODUCTION ? 'PRODUCTION' : 'SANDBOX',
+      // Product instance ID is non-sensitive configuration (Setu product id) and may
+      // be shown in the UI. The client secret / access token are never exposed here.
+      productInstanceId: s.productInstanceId || null,
+      product: 'Account Aggregator Data',
       detail: configured
         ? `Setu configured (${env === PRODUCTION ? 'production' : 'sandbox/UAT'}). data@setu.co`
         : 'READY_FOR_CONFIGURATION — Setu credentials required (client_id + client_secret + x-product-instance-id from the Setu Bridge). aa@setu.co',

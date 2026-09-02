@@ -38,6 +38,8 @@ Documentation is part of the product. This is the single source of truth for wha
 
 - `DEPLOYMENT.md` — run, configure, reset
 - `OPERATIONS_RUNBOOK.md` — runbook for running/monitoring
+- `npm run config:setu` — Setu config validation (presence-only, never prints secrets)
+- `npm run test:setu:sandbox` — credential-gated real Setu sandbox E2E (separate from CI)
 - `DISASTER_RECOVERY.md` — backup / restore
 - `TROUBLESHOOTING.md` — common issues
 - `USER_GUIDE.md` — end-user walkthrough

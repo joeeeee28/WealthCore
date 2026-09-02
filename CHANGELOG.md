@@ -89,3 +89,10 @@
 - **External `test:setu:sandbox` corrected to the current official Bearer auth model** (acquires a token via the Setu Authentication Manager; no `x-client-secret` request header). Still credential-gated and BLOCKED here.
 - **Multi-currency exposure in net worth**: `computeNetWorth` now returns a per-currency `currencyBreakdown` + `mixedCurrency`/`baseCurrency` so non-INR balances are surfaced and never silently treated as INR minors (no FX conversion).
 - Tests 119 → 120 (added mixed-currency + webhook idempotency assertions). **External Setu sandbox: BLOCKED — no Setu credentials in environment.**
+
+## v1.4.2 — Setu config aliases, config:setu validator, non-secret product-id in UI, egress/secret blocker recorded
+- **Setu env aliases**: `SETU_CLIENT_ID` / `SETU_CLIENT_SECRET` / `SETU_PRODUCT_INSTANCE_ID` (and `SETU_BASE_URL`, `SETU_TOKEN_URL`, `SETU_REDIRECT_URL`, `SETU_WEBHOOK_URL`, `SETU_WEBHOOK_SECRET`) are now accepted in addition to the canonical `WEALTHCORE_SETU_*` names. `config().setu` resolves both; the secret is read from env only and never logged/returned.
+- **`npm run config:setu`**: presence-only Setu config validation (never prints the secret/token); reports `SETU_ENVIRONMENT`, each field as `configured|NOT SET`, and the missing list.
+- **Connections UI**: Setu provider card now shows Environment, Product (`Account Aggregator Data`), and the **non-sensitive** Product Instance ID (never the client secret/access token).
+- **Recorded (2026-09-03)**: the non-secret Setu product instance ID wires correctly; `config:setu` shows `SETU_CLIENT_SECRET: NOT SET`. **BOTH** hard blockers confirmed: (1) no `.env`/secret (must be a freshly regenerated TEST secret) and (2) **no runtime egress to `setu.co`** (TLS to `fiu-sandbox.setu.co` is reset). Real external E2E remains **BLOCKED**; simulator E2E still PASS.
+- Tests 120 → 122 (config alias + validateSetuConfig secret-non-leak). `audit:secrets` clean.

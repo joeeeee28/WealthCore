@@ -37,10 +37,12 @@ function env() {
 /** Highest-confidence token endpoint for the current Setu AA environment. */
 function setuTokenEndpoint() {
   // Setu's token endpoint host is environment-specific; default to the same
-  // base host used by the AA API. Override via WEALTHCORE_SETU_TOKEN_URL.
+  // base host used by the AA API. Override via WEALTHCORE_SETU_TOKEN_URL or
+  // SETU_TOKEN_URL (both resolved into config().setu.tokenUrl).
   const base = baseUrl();
+  const cfg = config().setu || {};
   // Candidate token path. PENDING PROVIDER CONFIRMATION: exact path.
-  return process.env.WEALTHCORE_SETU_TOKEN_URL || `${base}/auth/token`;
+  return cfg.tokenUrl || `${base}/auth/token`;
 }
 
 /** Build the token request body/headers from client credentials. */

@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { config, validateConfig } from '../server/config.js';
+import { config, validateConfig, validateSetuConfig, resetConfig } from '../server/config.js';
 
 // Config module caches; reset by deleting the cache via function (no setter),
 // so test against freshly-computed config through validateConfig building a
@@ -62,4 +62,47 @@ test('config() returns env-aware defaults', () => {
   assert.ok(Object.hasOwn(c, 'market'));
   assert.ok(Object.hasOwn(c, 'llm'));
   assert.ok(Object.hasOwn(c, 'scheduler'));
+});
+
+test('SETU_* short aliases map into config().setu (never expose values)', () => {
+  const prev = {
+    ci: process.env.SETU_CLIENT_ID, cs: process.env.SETU_CLIENT_SECRET,
+    pi: process.env.SETU_PRODUCT_INSTANCE_ID, base: process.env.SETU_BASE_URL,
+  };
+  process.env.SETU_CLIENT_ID = 'test-client-id';
+  process.env.SETU_CLIENT_SECRET = 'top-secret-value';
+  process.env.SETU_PRODUCT_INSTANCE_ID = 'test-product-instance-id';
+  process.env.SETU_BASE_URL = 'https://fiu-sandbox.setu.co';
+  resetConfig();
+  const s = config().setu;
+  assert.equal(s.clientId, 'test-client-id');
+  assert.equal(s.productInstanceId, 'test-product-instance-id');
+  assert.equal(s.configured, true);
+  // Restore.
+  process.env.SETU_CLIENT_ID = prev.ci || ''; process.env.SETU_CLIENT_SECRET = prev.cs || '';
+  process.env.SETU_PRODUCT_INSTANCE_ID = prev.pi || ''; process.env.SETU_BASE_URL = prev.base || '';
+  resetConfig();
+});
+
+test('validateSetuConfig reports presence only and never leaks the secret', () => {
+  const prev = {
+    ci: process.env.SETU_CLIENT_ID, cs: process.env.SETU_CLIENT_SECRET,
+    pi: process.env.SETU_PRODUCT_INSTANCE_ID,
+  };
+  process.env.SETU_CLIENT_ID = 'cid'; process.env.SETU_CLIENT_SECRET = 'cs-value';
+  process.env.SETU_PRODUCT_INSTANCE_ID = 'pi';
+  resetConfig();
+  const r = validateSetuConfig(config());
+  assert.equal(r.valid, true);
+  // Presence flags only; the actual secret value is NEVER present in the report.
+  const json = JSON.stringify(r);
+  assert.ok(!json.includes('cs-value'), 'secret value must not appear in report');
+  assert.ok(!json.includes('cid'), 'client id value must not appear in report');
+  const secField = r.configuredFields.find((f) => f.key === 'SETU_CLIENT_SECRET');
+  assert.equal(secField.present, true);
+  assert.deepEqual(r.missing, []);
+  // Restore.
+  process.env.SETU_CLIENT_ID = prev.ci || ''; process.env.SETU_CLIENT_SECRET = prev.cs || '';
+  process.env.SETU_PRODUCT_INSTANCE_ID = prev.pi || '';
+  resetConfig();
 });

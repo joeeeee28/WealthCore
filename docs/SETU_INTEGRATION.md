@@ -1,6 +1,14 @@
 # WealthCore — Setu Account Aggregator Integration
 
-> **Status: PARTIALLY IMPLEMENTED (sandbox contract wired + verified against official docs; external sandbox connectivity BLOCKED — credentials not available; production PLANNED).**
+> **Status: PARTIALLY IMPLEMENTED.** The Setu sandbox **contract** (auth, consent,
+> webhook, data-session, ReBIT→canonical normalisation, persistence, idempotency) is
+> wired and verified against the current official docs + a bounded local simulator.
+> **Real external sandbox connectivity is BLOCKED** in this environment for two
+> independent reasons: (1) no `.env`/secret (`SETU_CLIENT_SECRET` must be a freshly
+> regenerated TEST secret, env-only) and (2) **no network egress to `setu.co`** (the
+> runtime cannot complete a TLS handshake to `https://fiu-sandbox.setu.co`).
+> **Production is PLANNED / BLOCKED BY REGULATORY ONBOARDING** — WealthCore is not an
+> RBI-authorised FIU/AA.
 >
 > Setu is the first **real** external AA provider wired into WealthCore's
 > provider-neutral layer. The adapter follows the **current official Setu
@@ -87,22 +95,61 @@ default path.
 
 ## 4. Environment configuration
 
+**Two env namespaces are accepted** for every Setu value: the canonical
+`WEALTHCORE_SETU_*` and the short `SETU_*` alias (e.g. `SETU_CLIENT_ID`,
+`SETU_CLIENT_SECRET`, `SETU_PRODUCT_INSTANCE_ID`). Either works; the secret is
+**only** ever read from the environment and **never** logged, returned by an API,
+or written to source/git/docs.
+
 ```
 AA_PROVIDER=setu            # or WEALTHCORE_AA_PROVIDER=setu
 AA_ENVIRONMENT=sandbox      # sandbox | production
 SETU_ENVIRONMENT=sandbox
-WEALTHCORE_SETU_BASE_URL=https://fiu-sandbox.setu.co   # sandbox
-# CURRENT OFFICIAL AUTH — client credentials (from the Setu Bridge). These are used
-# to ACQUIRE an access token (Auth Mechanism / getToken), not sent as headers:
-WEALTHCORE_SETU_CLIENT_ID=                              # client_id
-WEALTHCORE_SETU_CLIENT_SECRET=                          # client_secret
-WEALTHCORE_SETU_PRODUCT_INSTANCE_ID=                    # product-instance-id
+# Sandbox base URL (configurable, never hard-coded in app code):
+SETU_BASE_URL=https://fiu-sandbox.setu.co        # == WEALTHCORE_SETU_BASE_URL
+# CURRENT OFFICIAL AUTH — client credentials (from the Setu Bridge). Used ONLY to
+# ACQUIRE an access token (Auth Mechanism / getToken), NOT sent as AA headers:
+SETU_CLIENT_ID=                                   # == WEALTHCORE_SETU_CLIENT_ID
+SETU_CLIENT_SECRET=                               # == WEALTHCORE_SETU_CLIENT_SECRET  (fresh, regenerated; env-only)
+SETU_PRODUCT_INSTANCE_ID=                         # == WEALTHCORE_SETU_PRODUCT_INSTANCE_ID
 # Override the token endpoint / a legacy short-lived access token (optional):
-# WEALTHCORE_SETU_TOKEN_URL=
-WEALTHCORE_SETU_TOKEN=
-WEALTHCORE_SETU_WEBHOOK_SECRET=                         # for signature verification (optional)
-WEALTHCORE_SETU_SIGNING_PUBLIC_KEY=                     # request-signing public key (optional)
+# SETU_TOKEN_URL=                                 # == WEALTHCORE_SETU_TOKEN_URL
+# SETU_TOKEN=
+# Public WealthCore URL Setu can reach for the customer's consent/return journey:
+SETU_REDIRECT_URL=                                # == WEALTHCORE_SETU_REDIRECT_URL
+# Public callback Setu posts notifications to:
+SETU_WEBHOOK_URL=https://<public-domain>/api/v1/aa/webhook/setu   # == WEALTHCORE_SETU_WEBHOOK_URL
+# Optional webhook signing secret (best-effort; Setu AA docs don't publish an algorithm):
+# SETU_WEBHOOK_SECRET=                            # == WEALTHCORE_SETU_WEBHOOK_SECRET
 ```
+
+> **NOTE:** WealthCore reads configuration from `process.env` — there is **no** `dotenv`
+> parser. Set these variables via your process manager / secrets store, or `set -a; . ./.env; set +a`
+> before starting.
+
+### Configuration validation (presence-only, no secret leak)
+
+```bash
+npm run config:setu
+```
+
+Reports only presence/absence (never the secret value):
+
+```text
+SETU_ENVIRONMENT: sandbox
+SETU_CLIENT_ID: configured | NOT SET
+SETU_CLIENT_SECRET: configured | NOT SET
+SETU_PRODUCT_INSTANCE_ID: configured | NOT SET
+SETU_BASE_URL: configured
+SETU_TOKEN_URL: NOT SET
+SETU_REDIRECT_URL: not set
+SETU_WEBHOOK_URL: not set
+MISSING: ...
+configured: true/false
+```
+
+The **Setu product instance ID is non-secret configuration** and may be displayed in the
+Connections UI (never the client secret/access token/private key).
 
 ### Account availability
 
@@ -221,42 +268,57 @@ this table is a snapshot, not an ongoing binding.
 |----------|--------|
 | Mock AA | IMPLEMENTED |
 | Setu adapter (contract) | IMPLEMENTED against current official Setu auth + v2 endpoints |
-| Setu sandbox external E2E | BLOCKED — Setu sandbox credentials/access not available |
-| Setu production | PLANNED (requires credentials + onboarding) |
-| Finvu | PARTIALLY IMPLEMENTED / PENDING PROVIDER CONFIRMATION |
+| Setu sandbox external E2E | **BLOCKED** — secret not in env AND no network egress to setu.co (see §12) |
+| Setu production | PLANNED / BLOCKED BY REGULATORY ONBOARDING |
 
 ## 11. Remaining external dependencies
 
-- `WEALTHCORE_SETU_CLIENT_ID`, `WEALTHCORE_SETU_CLIENT_SECRET`,
-  `WEALTHCORE_SETU_PRODUCT_INSTANCE_ID` — from the Setu Bridge (see docs `Setu AA quickstart`)
-- Setu sandbox access (`support@setu.co` / `aa@setu.co`) to run `test:setu:sandbox`
+- **`SETU_CLIENT_SECRET`** — the previously exposed TEST secret must be **regenerated in
+  the Setu Bridge** and supplied only as an env var (never committed).
+- **Network egress to `https://fiu-sandbox.setu.co`** — the real external test must run
+  in an environment that can reach Setu (this sandbox's TLS handshake is reset).
+- Setu sandbox access/product configuration (`support@setu.co` / `aa@setu.co`) to run
+  `test:setu:sandbox`.
 - Production: FIU eligibility / TSP arrangement, Sahamati certification, central
-  registry, production credentials
+  registry, production credentials.
 
 ## 12. External sandbox verification — recorded result (2026-09-03)
 
 | Check | Result |
 |-------|--------|
-| Setu credentials present in environment | **NO** (WEALTHCORE_SETU_CLIENT_ID / _CLIENT_SECRET / _PRODUCT_INSTANCE_ID all unset; no .env) |
-| `GET /aa/providers` | `setu configured=false, mode=sandbox, requiresCredentials=true` (honest) |
-| `GET /config` | `aa.configured=false` — `READY_FOR_CONFIGURATION` / `Provider credentials required` |
-| `npm run test:setu:sandbox` | **BLOCKED — Real Setu sandbox credentials/access are not available.** (test SKIPped, exits 0) |
-| External Setu sandbox reached / authenticated | **NO** |
+| Setu **client_id** present in env as non-secret config | **YES** (wired; `SETU_CLIENT_ID` resolves to `config().setu.clientId`) |
+| Setu **product_instance_id** present (non-secret) | **YES** (`SETU_PRODUCT_INSTANCE_ID` set; sent as `x-product-instance-id`) |
+| Setu **client_secret** present | **NO** — `SETU_CLIENT_SECRET` not set (must be the **fresh regenerated** TEST secret, env-only) |
+| `npm run config:setu` | Reports `SETU_CLIENT_ID: configured`, `SETU_PRODUCT_INSTANCE_ID: configured`, `SETU_CLIENT_SECRET: NOT SET`, `MISSING: SETU_CLIENT_SECRET`, `configured: false` (no secret leaked) |
+| `setuCryptoConfig().configured` | `false` (correct — secret absent) |
+| Setu provider `status()` | `configured=false, mode=sandbox, environment=SANDBOX, requiresCredentials=true` (honest) |
+| Sandbox network egress from this environment | **BLOCKED** — `https://fiu-sandbox.setu.co` is unreachable (DNS resolves, TLS handshake reset: `OpenSSL SSL_connect: SSL_ERROR_SYSCALL`). Runtime `fetch` to it errors. |
+| `npm run test:setu:sandbox` | **BLOCKED — Real Setu sandbox credentials/access are not available.** (test SKIPped) |
+| External Setu sandbox reached / authenticated | **NO** (no egress AND no secret) |
 | Local simulator E2E (credential-free) | **PASS** — verifies current Bearer auth + full WealthCore flow + webhook (real payload shape, idempotent) |
 | Webhook consent-status contract (`payload.data.status`) | **FIXED** to Setu's real notification shape (was reading a non-existent top-level `status`) |
 | Webhook idempotency | **ADDED** (`webhook_notifications` table, one process per notification id) |
 | Consent URL persisted + surfaced | **ADDED** (`consents.consent_url`; Integrations screen "Open consent") |
 | Multi-currency exposure | **ADDED** per-currency breakdown in net worth (`currencyBreakdown`, `mixedCurrency`) — no silent FX mixing claim |
 
-**Conclusion: Setu external sandbox connectivity is BLOCKED pending real Setu-issued
-credentials. The adapter and simulator E2E are complete and contract-correct; only the
-credential-gated external step is held.** This is the honest state — no fabricated
-connectivity, no simulator passed off as real Setu.
+**Conclusion: Setu external sandbox connectivity is BLOCKED for TWO independent
+reasons in this environment:**
+1. **No `.env`/secret** — `SETU_CLIENT_SECRET` is absent (the previous TEST secret was
+   exposed and must be **regenerated**; only the fresh value in `process.env` may be used).
+2. **No network egress to Setu** — the runtime cannot complete a TLS handshake to
+   `https://fiu-sandbox.setu.co` (DNS resolves to `13.205.36.27` but the connection is
+   reset at the transport layer). This must be run in an environment that can reach Setu.
 
-To run the real external sandbox test, provide via environment/secrets (never commit):
-`WEALTHCORE_SETU_CLIENT_ID`, `WEALTHCORE_SETU_CLIENT_SECRET`,
-`WEALTHCORE_SETU_PRODUCT_INSTANCE_ID`, set `AA_PROVIDER=setu`,
-`AA_ENVIRONMENT=sandbox`, then run `npm run test:setu:sandbox`.
+The adapter and simulator E2E are complete and contract-correct; only the credential-gated,
+egress-enabled external step is held. This is the honest state — no fabricated connectivity,
+no simulator passed off as real Setu.
+
+To run the real external sandbox test, provide (never commit):
+`SETU_CLIENT_ID`, the **fresh regenerated** `SETU_CLIENT_SECRET`, `SETU_PRODUCT_INSTANCE_ID`,
+set `AA_PROVIDER=setu`, `AA_ENVIRONMENT=sandbox`, and ensure the environment has network
+access to `https://fiu-sandbox.setu.co`, then run `npm run test:setu:sandbox`. The Setu
+product is `Account Aggregator Data` (TEST/SANDBOX); product instance id
+`a068da97-a7d8-4ed0-a7bd-764d00fbde68` is sent as `x-product-instance-id` (non-secret).
 
 ## 13. Source register (official resources used)
 

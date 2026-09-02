@@ -19,6 +19,46 @@ function num(v, def) {
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
+// Read a Setu config value, preferring the canonical WEALTHCORE_SETU_* namespace
+// then the short SETU_* alias. Never returns the secret value in logs.
+function setuVal(canonical, alias, def = null) {
+  const v = process.env[canonical] || process.env[alias];
+  return (v === undefined || v === '') ? def : v;
+}
+
+/** Build the Setu config group from environment (both namespaces). */
+function buildSetuConfig() {
+  const clientId = setuVal('WEALTHCORE_SETU_CLIENT_ID', 'SETU_CLIENT_ID');
+  const clientSecret = setuVal('WEALTHCORE_SETU_CLIENT_SECRET', 'SETU_CLIENT_SECRET');
+  const productInstanceId = setuVal('WEALTHCORE_SETU_PRODUCT_INSTANCE_ID', 'SETU_PRODUCT_INSTANCE_ID');
+  const token = setuVal('WEALTHCORE_SETU_TOKEN', 'SETU_TOKEN');
+  const baseUrl = setuVal('WEALTHCORE_SETU_BASE_URL', 'SETU_BASE_URL', 'https://fiu-sandbox.setu.co');
+  const webhookSecret = setuVal('WEALTHCORE_SETU_WEBHOOK_SECRET', 'SETU_WEBHOOK_SECRET');
+  const signingPublicKey = setuVal('WEALTHCORE_SETU_SIGNING_PUBLIC_KEY', 'SETU_SIGNING_PUBLIC_KEY');
+  const tokenUrl = setuVal('WEALTHCORE_SETU_TOKEN_URL', 'SETU_TOKEN_URL');
+  const redirectUrl = setuVal('WEALTHCORE_SETU_REDIRECT_URL', 'SETU_REDIRECT_URL');
+  // Webhook/callback URL is the public base WealthCore exposes to Setu.
+  const webhookUrl = setuVal('WEALTHCORE_SETU_WEBHOOK_URL', 'SETU_WEBHOOK_URL');
+  const environment = setuVal('SETU_ENVIRONMENT', 'WEALTHCORE_SETU_ENVIRONMENT', setuVal('SETU_ENV', 'WEALTHCORE_SETU_ENV', 'sandbox'));
+  return {
+    clientId,
+    clientSecret,
+    productInstanceId,
+    token,
+    tokenUrl,
+    baseUrl,
+    redirectUrl,
+    webhookUrl,
+    webhookSecret,
+    signingPublicKey,
+    environment,
+    configured: Boolean(
+      (clientId && clientSecret && productInstanceId) ||
+      (token && productInstanceId),
+    ),
+  };
+}
+
 function computeConfig() {
   const env = NODE_ENV;
   const db = process.env.WEALTHCORE_DB || (env === 'test' ? ':memory:' : 'data/wealthcore.db');
@@ -56,19 +96,10 @@ function computeConfig() {
     },
 
     // Setu (AA gateway) — optional credentials group.
-    setu: {
-      // Current official model: x-client-id + x-client-secret + x-product-instance-id.
-      clientId: process.env.WEALTHCORE_SETU_CLIENT_ID || null,
-      clientSecret: process.env.WEALTHCORE_SETU_CLIENT_SECRET || null,
-      productInstanceId: process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID || null,
-      // Legacy access token (accepted when client-credentials are not supplied).
-      token: process.env.WEALTHCORE_SETU_TOKEN || null,
-      baseUrl: process.env.WEALTHCORE_SETU_BASE_URL || 'https://fiu-sandbox.setu.co',
-      webhookSecret: process.env.WEALTHCORE_SETU_WEBHOOK_SECRET || null,
-      signingPublicKey: process.env.WEALTHCORE_SETU_SIGNING_PUBLIC_KEY || null,
-      environment: process.env.SETU_ENVIRONMENT || process.env.WEALTHCORE_SETU_ENVIRONMENT || 'sandbox',
-      configured: Boolean((process.env.WEALTHCORE_SETU_CLIENT_ID && process.env.WEALTHCORE_SETU_CLIENT_SECRET && process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID) || (process.env.WEALTHCORE_SETU_TOKEN && process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID)),
-    },
+    // Two env namespaces are accepted (WEALTHCORE_SETU_* is the canonical one;
+    // the short SETU_* forms are read as aliases so the documented Setu config
+    // naming works unchanged). No value is ever logged.
+    setu: buildSetuConfig(),
 
     // AA environment mode (mock | sandbox | production).
     aaEnvironment: process.env.AA_ENVIRONMENT || process.env.WEALTHCORE_AA_ENVIRONMENT || 'development',
@@ -120,6 +151,34 @@ export function resetConfig() {
  * fails clearly when required configuration is missing in production.
  * Returns { errors: [] } when valid.
  */
+/**
+ * Setu-specific configuration report. Returns presence/absence only — never the
+ * secret value, token, or any credential. Used by `npm run config:setu`.
+ */
+export function validateSetuConfig(cfg = config()) {
+  const s = cfg.setu || {};
+  const items = [
+    { key: 'SETU_CLIENT_ID', present: Boolean(s.clientId) },
+    { key: 'SETU_CLIENT_SECRET', present: Boolean(s.clientSecret) },
+    { key: 'SETU_PRODUCT_INSTANCE_ID', present: Boolean(s.productInstanceId) },
+    { key: 'SETU_BASE_URL', present: Boolean(s.baseUrl) },
+    { key: 'SETU_TOKEN_URL', present: Boolean(s.tokenUrl) },
+    { key: 'SETU_REDIRECT_URL', present: Boolean(s.redirectUrl) },
+    { key: 'SETU_WEBHOOK_URL', present: Boolean(s.webhookUrl) },
+  ];
+  const required = ['SETU_CLIENT_ID', 'SETU_CLIENT_SECRET', 'SETU_PRODUCT_INSTANCE_ID'];
+  const missing = required.filter((k) => !items.find((i) => i.key === k).present);
+  const environment = String(s.environment || 'sandbox').toUpperCase();
+  return {
+    valid: missing.length === 0,
+    environment,
+    configured: Boolean(s.configured),
+    configuredFields: items,
+    missing,
+    // Never include clientSecret/token/accessToken values.
+  };
+}
+
 export function validateConfig(cfg = config()) {
   const errors = [];
 
@@ -164,4 +223,4 @@ export function validateConfig(cfg = config()) {
   return { valid: errors.length === 0, errors };
 }
 
-export default { config, validateConfig, resetConfig };
+export default { config, validateConfig, validateSetuConfig, resetConfig };
