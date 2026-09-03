@@ -1,16 +1,33 @@
 // WealthCore — Setu Authentication Manager.
 //
-// CURRENT OFFICIAL SETU AUTH MODEL (verified from Setu docs):
-//   * Bridge provides client_id + client_secret + x-product-instance-id.
-//   * The access token is acquired from Setu's **Generate Token API** with a
-//     JSON body containing `{ clientID, secret }`.
-//   * Every Setu AA API then uses `Authorization: Bearer <token>` and
+// CURRENT OFFICIAL SETU AA (FIU) AUTH MODEL — verified from Setu's own OpenAPI
+// reference (github.com/SetuHQ/docs :: api-references/data/account-aggregator.json,
+// operationId "getToken") and the official AA docs site (docs.setu.co/data/account-aggregator):
+//
+//   * The Bridge provides an FIU **client_id**, **client_secret** and the
+//     **x-product-instance-id** (the FIU Product ID).
+//   * The access token is acquired from the AA product's **Get Token** endpoint,
+//     which lives on the SAME host as the AA APIs (NOT the payments host):
+//       Sandbox:   POST https://fiu-sandbox.setu.co/users/login
+//       Production: POST https://fiu.setu.co/users/login
+//     - Required header:  `client: bridge`
+//     - Content-Type:     application/json
+//     - JSON body:        { "clientID": "<client_id>",
+//                           "grant_type": "client_credentials",
+//                           "secret": "<client_secret>" }
+//     - Success response: { "access_token": "<bearer>", "refresh_token": "<bearer>" }
+//   * Every Setu AA API then uses `Authorization: Bearer <access_token>` and
 //     `x-product-instance-id`. The client secret is NEVER sent as a request
-//     header on AA APIs — it is used only to acquire the access token.
-//   * Generate Token API:
-//       Sandbox:   POST https://uat.setu.co/api/v2/auth/token
-//       Production: POST https://prod.setu.co/api/v2/auth/token
-//       Response:  { data: { token, expiresIn } }
+//     header on the AA APIs — it is used only to acquire the access token.
+//
+// IMPORTANT (root cause of the earlier HTTP 403):
+//   The legacy payments/KYC "Generate Token API"
+//       POST https://uat.setu.co/api/v2/auth/token   body { clientID, secret }
+//   belongs to Setu's PAYMENTS products (BBPS, UPI deeplinks) and data-KYC
+//   products (PAN/eSign/DigiLocker/Insights v1). It is NOT part of the Account
+//   Aggregator product. Presenting AA/FIU credentials to that payments endpoint
+//   is rejected with HTTP 403 (forbidden — the credentials have no entitlement on
+//   that product/host). The AA product uses /users/login on fiu-sandbox/fiu.setu.co.
 //
 // This module:
 //   * acquires an access token from client credentials
@@ -25,32 +42,65 @@ import { aaError, AA_ERROR_CODES } from '../errors.js';
 
 const BASE_SANDBOX = 'https://fiu-sandbox.setu.co';
 const BASE_PRODUCTION = 'https://fiu.setu.co';
-const TOKEN_SANDBOX = 'https://uat.setu.co/api/v2/auth/token';
-const TOKEN_PRODUCTION = 'https://prod.setu.co/api/v2/auth/token';
+// AA Get Token endpoint path (same host as the AA APIs).
+const TOKEN_PATH = '/users/login';
 
 function env() {
   return config();
 }
 
-/** Highest-confidence token endpoint for the current Setu AA environment. */
-function setuTokenEndpoint() {
-  // Setu's Generate Token API uses a different host than the AA APIs. Default to
-  // the documented sandbox/production endpoint; override via
-  // WEALTHCORE_SETU_TOKEN_URL or SETU_TOKEN_URL (both resolved into
-  // config().setu.tokenUrl).
-  const cfg = env();
-  const prod = cfg.aaEnvironment === 'production' || (cfg.setu && cfg.setu.environment === 'production');
-  return cfg.setu?.tokenUrl || (prod ? TOKEN_PRODUCTION : TOKEN_SANDBOX);
+function isProduction(cfg) {
+  return cfg.aaEnvironment === 'production' || (cfg.setu && cfg.setu.environment === 'production');
 }
 
-/** Build the token request body/headers from client credentials. */
+/** Base host for the AA product (token + AA APIs share this host). */
+function aaBaseHost() {
+  const cfg = env();
+  const prod = isProduction(cfg);
+  // Prefer the configured AA base URL (it already points at fiu-sandbox/fiu or an
+  // explicit override); strip any trailing slash and any path so we append the
+  // token path ourselves.
+  const configured = cfg.setu && cfg.setu.baseUrl;
+  if (configured) {
+    try {
+      const u = new URL(configured);
+      return `${u.protocol}//${u.host}`;
+    } catch {
+      // Fall through to the documented default if the override is malformed.
+    }
+  }
+  return prod ? BASE_PRODUCTION : BASE_SANDBOX;
+}
+
+/**
+ * Highest-confidence token endpoint for the current Setu AA environment.
+ * Defaults to the documented AA Get Token endpoint on the AA host; overridable
+ * via WEALTHCORE_SETU_TOKEN_URL / SETU_TOKEN_URL (resolved into config().setu.tokenUrl).
+ */
+function setuTokenEndpoint() {
+  const cfg = env();
+  if (cfg.setu && cfg.setu.tokenUrl) return cfg.setu.tokenUrl;
+  return `${aaBaseHost()}${TOKEN_PATH}`;
+}
+
+/** Build the AA token request body/headers from client credentials. */
 function setuTokenRequest(clientId, clientSecret) {
-  // Current official Setu Generate Token API: JSON, NOT OAuth2 form-encoded
-  // client_credentials. Isolated so the wire format stays in one place.
+  // Current official Setu AA "Get Token" contract: JSON body with clientID,
+  // secret AND grant_type=client_credentials, plus the required `client: bridge`
+  // header. Isolated so the wire format stays in one place.
   return {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ clientID: clientId, secret: clientSecret }),
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      // Required by the AA Get Token endpoint (OpenAPI: header `client`, enum ["bridge"]).
+      client: 'bridge',
+    },
+    body: JSON.stringify({
+      clientID: clientId,
+      grant_type: 'client_credentials',
+      secret: clientSecret,
+    }),
   };
 }
 
@@ -70,8 +120,7 @@ export function setuCreds() {
 
 function baseUrl() {
   const cfg = env();
-  const prod = cfg.aaEnvironment === 'production' || (cfg.setu && cfg.setu.environment === 'production');
-  return (cfg.setu && prod ? cfg.setu.baseUrl : cfg.setu && cfg.setu.baseUrl) || (prod ? BASE_PRODUCTION : BASE_SANDBOX);
+  return (cfg.setu && cfg.setu.baseUrl) || (isProduction(cfg) ? BASE_PRODUCTION : BASE_SANDBOX);
 }
 
 /**
@@ -88,6 +137,34 @@ function getCache(clientId) {
   return cacheByClient.get(clientId);
 }
 
+/** Redact anything credential/token-shaped from a provider message before logging. */
+function redact(message) {
+  return String(message || '')
+    .replace(/(Bearer\s+)[A-Za-z0-9._\-]+/gi, '$1REDACTED')
+    .replace(/(secret"?\s*[:=]\s*"?)([^"&\s]+)/gi, '$1REDACTED')
+    .replace(/(access_token"?\s*[:=]\s*"?)([^"&\s]+)/gi, '$1REDACTED')
+    .replace(/(refresh_token"?\s*[:=]\s*"?)([^"&\s]+)/gi, '$1REDACTED')
+    .replace(/\b(client_secret|SETU_CLIENT_SECRET|Authorization)\b/gi, 'REDACTED');
+}
+
+/**
+ * Extract the bearer token from a Get Token response. Current official AA
+ * contract returns `access_token`; tolerate the legacy payments `data.token`
+ * shape as a fallback so a configured override still works.
+ */
+function extractToken(json) {
+  const token =
+    (json && json.access_token) ||
+    (json && json.data && json.data.token) ||
+    null;
+  const expiresIn = Number(
+    (json && (json.expires_in || json.expiresIn)) ||
+    (json && json.data && (json.data.expiresIn || json.data.expires_in)) ||
+    0,
+  ); // seconds
+  return { token, expiresIn };
+}
+
 async function fetchToken(cfg) {
   const endpoint = setuTokenEndpoint();
   const req = setuTokenRequest(cfg.clientId, cfg.clientSecret);
@@ -100,25 +177,54 @@ async function fetchToken(cfg) {
     clearTimeout(timer);
     const timedOut = e && e.name === 'AbortError';
     throw aaError(timedOut ? AA_ERROR_CODES.PROVIDER_UNAVAILABLE : AA_ERROR_CODES.PROVIDER_UNAVAILABLE,
-      timedOut ? 'Setu token endpoint timed out.' : 'Setu token endpoint unreachable.');
+      timedOut ? 'Setu token endpoint timed out.' : 'Setu token endpoint unreachable.',
+      { endpoint: safeEndpoint(endpoint) });
   }
   clearTimeout(timer);
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+
+  // SAFE diagnostics — never include the secret, token or Authorization header.
+  const contentType = res.headers.get('content-type') || '';
+  const providerErrorCode = (json && (json.errorCode || json.error || json.code)) || '';
+  const providerErrorMessage = redact((json && (json.errorMsg || json.message || json.error_description)) || '');
+
   if (!res.ok) {
     // Authentication failure (401/403) is distinct from a general API failure.
-    throw aaError(res.status === 401 || res.status === 403 ? AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED : AA_ERROR_CODES.PROVIDER_UNAVAILABLE,
-      `Setu token request failed (HTTP ${res.status}).`, { status: res.status });
+    const authFailed = res.status === 401 || res.status === 403;
+    throw aaError(
+      authFailed ? AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED : AA_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      `Setu token request failed (HTTP ${res.status}).`,
+      {
+        status: res.status,
+        endpoint: safeEndpoint(endpoint),
+        contentType,
+        providerErrorCode: providerErrorCode ? String(providerErrorCode).slice(0, 64) : '',
+        providerErrorMessage: providerErrorMessage.slice(0, 200),
+      },
+    );
   }
-  // Current official Generate Token API returns the token in data.token.
-  const token = json && json.data && json.data.token;
-  if (!token) throw aaError(AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED, 'Setu token response did not include data.token.');
-  const expiresIn = Number(json && json.data && (json.data.expiresIn || json.data.expires_in)); // seconds
+  const { token, expiresIn } = extractToken(json);
+  if (!token) {
+    throw aaError(AA_ERROR_CODES.PROVIDER_AUTHENTICATION_FAILED,
+      'Setu token response did not include access_token.',
+      { endpoint: safeEndpoint(endpoint), contentType });
+  }
   return {
     token,
     expiresAtMs: expiresIn > 0 ? Date.now() + (expiresIn - 30) * 1000 : Date.now() + 25 * 60 * 1000,
   };
+}
+
+/** Return only the safe origin+path of an endpoint for diagnostics (no query/creds). */
+function safeEndpoint(endpoint) {
+  try {
+    const u = new URL(endpoint);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '(unparseable-endpoint)';
+  }
 }
 
 /**
