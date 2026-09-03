@@ -11,12 +11,17 @@
 //   GET  /sessions/:id           -> FI data (COMPLETED/PARTIAL/PENDING; fips[].accounts[].data)
 //   Webhook: Setu -> your endpoint, signed (X-Webhook-Signature)
 //   Auth (CURRENT OFFICIAL): Bridge provides client_id + client_secret +
-//     x-product-instance-id. The access token is obtained via Setu's Generate
-//     Token API (POST https://uat.setu.co/api/v2/auth/token in sandbox; token
-//     returned as data.token) in setu-auth.js. Setu AA APIs require
-//     `Authorization: Bearer <access_token>` + `x-product-instance-id`. The
-//     client secret is NEVER sent as a request header on AA APIs. An auth
-//     manager caches/renews the token.
+//     x-product-instance-id. The access token is obtained via the AA product's
+//     Get Token endpoint — POST /users/login on the SAME host as the AA APIs
+//     (sandbox https://fiu-sandbox.setu.co/users/login; production
+//     https://fiu.setu.co/users/login), header `client: bridge`, JSON body
+//     { clientID, grant_type:"client_credentials", secret }, returning
+//     { access_token, refresh_token } — implemented in setu-auth.js. Setu AA APIs
+//     require `Authorization: Bearer <access_token>` + `x-product-instance-id`.
+//     The client secret is NEVER sent as a request header on AA APIs. An auth
+//     manager caches/renews the token. (The payments/KYC endpoint
+//     https://uat.setu.co/api/v2/auth/token is a different Setu product and 403s
+//     for AA/FIU credentials.)
 //
 // Setu's `format=json` sandbox path returns DECRYPTED ReBIT JSON to the FIU, so
 // no FIU-side decryption is required on the default path. The adapter translates

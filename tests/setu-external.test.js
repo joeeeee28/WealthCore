@@ -5,11 +5,14 @@
 // present. It hits the actual Setu sandbox (https://fiu-sandbox.setu.co) — the
 // local simulator is NOT used here.
 //
-// It uses the CURRENT OFFICIAL Setu auth model:
-//   Bridge (client_id + client_secret) -> Generate Token API
-//   (POST https://uat.setu.co/api/v2/auth/token; JSON {clientID, secret};
-//   response data.token) -> access_token
-//   -> `Authorization: Bearer <access_token>` + `x-product-instance-id`
+// It uses the CURRENT OFFICIAL Setu AA (FIU) auth model:
+//   Bridge (client_id + client_secret + FIU Product ID) -> AA Get Token endpoint
+//   POST https://fiu-sandbox.setu.co/users/login  (production: https://fiu.setu.co/users/login)
+//   header `client: bridge`; JSON { clientID, grant_type:"client_credentials", secret }
+//   response { access_token, refresh_token } -> Bearer access_token
+//   -> AA APIs use `Authorization: Bearer <access_token>` + `x-product-instance-id`
+// NOTE: the legacy payments/KYC endpoint https://uat.setu.co/api/v2/auth/token is a
+//   DIFFERENT Setu product and rejects AA/FIU credentials with HTTP 403. It is not used.
 // The client secret is NEVER sent as an AA request header.
 //
 // If credentials are absent it reports BLOCKED and skips WITHOUT fabricating any
@@ -72,14 +75,37 @@ test('REAL Setu sandbox connectivity (Bearer auth)', { skip: !credsAvailable() }
   try {
     token = await getAccessToken();
   } catch (e) {
-    // Distinguish BLOCKED-by-network from credential rejection. Never print a secret.
+    // Distinguish BLOCKED-by-network from credential/contract rejection. Never print a
+    // secret, token, Authorization header, cookie or PII. Structured, redacted-only
+    // diagnostics come back from the auth manager on e.meta (endpoint origin+path,
+    // HTTP status, content-type, provider error code/message — all sanitised).
     const code = e.code || '';
-    const msg = String(e.message || e).replace(/\b(SETU_CLIENT_SECRET|client_secret|Authorization|Bearer [A-Za-z0-9._-]{4,})/gi, 'REDACTED');
-    console.error(`AUTH RESULT: FAILED — code=${code} message=${msg}`);
-    if (code === 'PROVIDER_UNAVAILABLE' || code === 'FETCH_TIMEOUT') {
-      console.error('STATUS: BLOCKED — NETWORK. The runtime could not reach the Setu token endpoint (check egress/firewall).');
+    const meta = (e && e.meta) || {};
+    const sanitize = (v) => String(v == null ? '' : v)
+      .replace(/(Bearer\s+)[A-Za-z0-9._\-]+/gi, '$1REDACTED')
+      .replace(/(secret"?\s*[:=]\s*"?)([^"&\s]+)/gi, '$1REDACTED')
+      .replace(/(token"?\s*[:=]\s*"?)([A-Za-z0-9._\-]{6,})/gi, '$1REDACTED')
+      .slice(0, 200);
+    const msg = sanitize(e.message || e);
+
+    console.error('--- SETU TOKEN DIAGNOSTICS (redacted) ---');
+    console.error(`SETU TOKEN ENDPOINT: ${meta.endpoint || '(unknown)'}`);
+    console.error(`SETU TOKEN HTTP STATUS: ${meta.status != null ? meta.status : '(no HTTP response)'}`);
+    console.error(`SETU TOKEN CONTENT TYPE: ${meta.contentType || '(none)'}`);
+    console.error(`SETU PROVIDER ERROR CODE: ${meta.providerErrorCode || '(none)'}`);
+    console.error(`SETU PROVIDER ERROR MESSAGE: ${meta.providerErrorMessage || '(none)'}`);
+    console.error('-----------------------------------------');
+    console.error(`AUTH RESULT: FAILED\ncode=${code}\nmessage=${msg}`);
+
+    const networkish = code === 'PROVIDER_UNAVAILABLE' || code === 'FETCH_TIMEOUT';
+    // An HTTP status of 0/absent means we never got a response (transport/TLS/DNS).
+    const gotHttpResponse = meta.status != null && Number(meta.status) > 0;
+    if (networkish && !gotHttpResponse) {
+      console.error('STATUS: BLOCKED — NETWORK. The runtime could not reach the Setu token endpoint (check egress/firewall/DNS/TLS).');
+    } else if (meta.status === 403 || meta.status === 401 || code === 'PROVIDER_AUTHENTICATION_FAILED' || code === 'AUTHENTICATION_FAILED') {
+      console.error('STATUS: BLOCKED — AUTHENTICATION. Setu rejected the token request (check credentials product/environment and the AA token endpoint /users/login).');
     } else {
-      console.error('STATUS: BLOCKED — AUTHENTICATION. Setu rejected the credentials/token endpoint.');
+      console.error('STATUS: BLOCKED — PROVIDER CONTRACT/UNEXPECTED. The endpoint responded but the token contract did not match.');
     }
     throw e;
   }

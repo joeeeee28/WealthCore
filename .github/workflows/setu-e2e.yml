@@ -111,6 +111,18 @@ jobs:
             exit 2
           fi
           echo "NETWORK_TEST: TOKEN_HOST_OK — $TOKEN_HOST returned HTTP $TOKEN_CODE (a 4xx still proves the socket/TLS/TCP path)"
+          # 5) The CURRENT official AA token endpoint lives on the AA host itself
+          #    (POST /users/login on fiu-sandbox.setu.co). A bare GET to the host
+          #    proves reachability; the credential-gated test below exercises the
+          #    real POST. NOTE: uat.setu.co/api/v2/auth/token is a PAYMENTS product
+          #    endpoint and 403s for AA/FIU credentials — it is not used.
+          AA_TOKEN_URL="https://fiu-sandbox.setu.co/users/login"
+          AA_TOKEN_CODE=$(curl -sS -m 25 -o /dev/null -w "%{http_code}" "$AA_TOKEN_URL" 2>/tmp/setu_aa_token_err || true)
+          if [ "$AA_TOKEN_CODE" = "000" ] || [ -z "$AA_TOKEN_CODE" ]; then
+            echo "NETWORK_TEST: AA_TOKEN_HOST_FAIL — connection could not complete to $AA_TOKEN_URL: $(cat /tmp/setu_aa_token_err 2>/dev/null || true)"
+            exit 2
+          fi
+          echo "NETWORK_TEST: AA_TOKEN_HOST_OK — $AA_TOKEN_URL returned HTTP $AA_TOKEN_CODE (a 4xx/405 still proves the socket/TLS/TCP path; the real credentialed POST runs in the next step)"
 
       - name: Run the REAL Setu sandbox external test (credential-gated)
         id: setu

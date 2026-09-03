@@ -20,6 +20,10 @@ export const AA_ERROR_CODES = {
   PARTIAL_FIP_FAILURE: 'PARTIAL_FIP_FAILURE',
   PROVIDER_UNAVAILABLE: 'PROVIDER_UNAVAILABLE',
   AUTHENTICATION_FAILED: 'AUTHENTICATION_FAILED',
+  // Distinct code for a provider rejecting credential/token acquisition (HTTP 401/403
+  // on the token endpoint). Referenced by the Setu auth manager and the token-refresh
+  // retry guard; defined explicitly so a rejected token request never yields code=undefined.
+  PROVIDER_AUTHENTICATION_FAILED: 'PROVIDER_AUTHENTICATION_FAILED',
   PROVIDER_NOT_CONFIGURED: 'PROVIDER_NOT_CONFIGURED',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
   CONSENT_NOT_FOUND: 'CONSENT_NOT_FOUND',

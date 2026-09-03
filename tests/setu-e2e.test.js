@@ -49,14 +49,19 @@ function startSetuSimulator() {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      // Token endpoint (current official Generate Token API): the request is JSON
-      // with clientID/secret and the token is returned under data.token.
-      if (req.method === 'POST' && url.pathname === '/auth/token') {
+      // Token endpoint (current official Setu AA "Get Token"): POST /users/login,
+      // header `client: bridge`, JSON body { clientID, grant_type:"client_credentials",
+      // secret }; the bearer token is returned as `access_token`.
+      if (req.method === 'POST' && url.pathname === '/users/login') {
         const tokenReq = body ? JSON.parse(body) : {};
-        if ((req.headers['content-type'] || '') !== 'application/json' || !tokenReq.clientID || !tokenReq.secret) {
-          return json(res, 400, { status: 400, success: false, data: { error: 'invalid token request' } });
+        const wellFormed =
+          (req.headers['content-type'] || '').includes('application/json') &&
+          (req.headers['client'] || '') === 'bridge' &&
+          tokenReq.clientID && tokenReq.secret && tokenReq.grant_type === 'client_credentials';
+        if (!wellFormed) {
+          return json(res, 400, { errorCode: 'InvalidRequest', errorMsg: 'invalid token request' });
         }
-        return json(res, 200, { status: 200, success: true, data: { token: 'sim-access-token', expiresIn: 3600 } });
+        return json(res, 200, { access_token: 'sim-access-token', refresh_token: 'sim-refresh-token' });
       }
       // All other API calls must carry Authorization: Bearer <access_token> + x-product-instance-id.
       const auth = req.headers['authorization'] || '';
@@ -100,7 +105,7 @@ before(async () => {
   process.env.WEALTHCORE_SETU_CLIENT_SECRET = 'sim-client-secret';
   process.env.WEALTHCORE_SETU_PRODUCT_INSTANCE_ID = 'sim-pi';
   process.env.WEALTHCORE_SETU_BASE_URL = `http://127.0.0.1:${simPort}`;
-  process.env.WEALTHCORE_SETU_TOKEN_URL = `http://127.0.0.1:${simPort}/auth/token`;
+  process.env.WEALTHCORE_SETU_TOKEN_URL = `http://127.0.0.1:${simPort}/users/login`;
   // Reset the cached config so the server (imported next) picks up the env.
   const { resetConfig } = await import('../server/config.js');
   resetConfig();
