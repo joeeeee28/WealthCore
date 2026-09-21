@@ -8,6 +8,8 @@ WealthCore is a **private, personal financial operating system**. It centralises
 
 ## What's inside
 
+- **Central data environments** — one `WEALTHCORE_DATA_ENVIRONMENT` switch (`DEMO` default · `FINVU_SANDBOX` · `SETU_SANDBOX` · `PRODUCTION`) with fail-fast validation; PRODUCTION never falls back to demo. See [`docs/DATA_ENVIRONMENTS.md`](docs/DATA_ENVIRONMENTS.md).
+- **Demo data environment** — a deterministic, clearly-labelled *synthetic* wealth profile (7 accounts, 12 holdings, 180 transactions, retirement, insurance, 6 goals) through the same AA provider architecture as real providers; no bank credentials, ever. See [`docs/DEMO_DATA.md`](docs/DEMO_DATA.md).
 - **Single source of truth** for net worth and portfolio value across every surface.
 - **Real, deterministic financial calculations** (EMI, SIP, FD, CAGR, XIRR) — never computed by an LLM.
 - **Transaction intelligence** — validation, deduplication, auto-categorisation, transfer & recurring detection.
@@ -26,14 +28,14 @@ WealthCore is a **private, personal financial operating system**. It centralises
 ```bash
 npm install
 npm run dev        # http://0.0.0.0:8080
-npm test           # 81 automated tests
+npm test           # 191 automated tests
 npm audit:secrets  # secret scan (clean)
 npm audit          # dependency audit (0 vulnerabilities)
 ```
 
 1. Open the app → **Setup**.
 2. Create your user account.
-3. Add accounts/transactions/investments — or load clearly-labelled sample data (Settings → Load sample data).
+3. Explore instantly with **Settings → Load Demo Wealth Profile** — deterministic synthetic data (🧪 DEMO MODE); `WEALTHCORE_DATA_ENVIRONMENT` selects Finvu/Setu sandboxes or real providers for live connectivity.
 4. Explore **Reconciliation**, **Import**, **Notifications**, **Integrations** and the **AI Assistant**.
 
 ## Architecture (summary)

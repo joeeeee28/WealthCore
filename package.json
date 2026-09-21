@@ -1,6 +1,6 @@
 {
   "name": "wealthcore",
-  "version": "1.1.0",
+  "version": "1.6.0",
   "description": "WealthCore - Your Entire Financial Life. One Intelligent Core. A private, personal financial operating system.",
   "type": "module",
   "main": "server/index.js",

@@ -32,20 +32,20 @@ function categoryId(db, userId, name, kind) {
   return info.lastInsertRowid;
 }
 
-function upsertAccount(db, userId, account) {
+function upsertAccount(db, userId, account, source = 'aa') {
   if (!account.external_ref) return { id: null, created: false };
   const existing = db.prepare('SELECT * FROM accounts WHERE user_id=? AND external_ref=?').get(userId, account.external_ref);
   if (existing) return { id: existing.id, created: false };
   const info = db.prepare(`
     INSERT INTO accounts (user_id, name, type, institution, currency, balance_minor, is_liability, source, provider, external_ref, aa_status, is_demo, last_synced_at, masked_account_number, provider_ref, correlation_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'aa', ?, ?, 'SYNCED', 1, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SYNCED', 1, ?, ?, ?, ?)
   `).run(userId, account.name, account.type, account.fip || null, account.currency,
-    account.balanceMinor, account.isLiability ? 1 : 0, account.provider || account.fip || 'mock',
+    account.balanceMinor, account.isLiability ? 1 : 0, source, account.provider || account.fip || 'mock',
     account.external_ref, nowIso(), account.maskedAccountNumber || null, account.external_ref, `sync-${Date.now()}`);
   return { id: info.lastInsertRowid, created: true };
 }
 
-function upsertTransaction(db, userId, tx) {
+function upsertTransaction(db, userId, tx, source = 'aa') {
   if (!tx.sourceTxnId && !tx.accountId) return { created: false };
   const bySource = tx.sourceTxnId
     ? db.prepare('SELECT id FROM transactions WHERE user_id=? AND source_txn_id=?').get(userId, tx.sourceTxnId)
@@ -59,20 +59,20 @@ function upsertTransaction(db, userId, tx) {
   const cid = categoryId(db, userId, tx.category, tx.kind);
   const info = db.prepare(`
     INSERT INTO transactions (user_id, account_id, date, amount_minor, currency, direction, kind, category_id, merchant, note, source, provider_ref, external_id, dedup_key, source_txn_id, fip, ingested_at, is_demo)
-    VALUES (?, ?, ?, ?, 'INR', ?, ?, ?, ?, ?, 'aa', ?, ?, ?, ?, ?, ?, 1)
+    VALUES (?, ?, ?, ?, 'INR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `).run(userId, tx.accountId, tx.date, tx.amountMinor, tx.direction, tx.kind, cid,
-    tx.merchant, null, tx.sourceTxnId, tx.sourceTxnId, key, tx.sourceTxnId, tx.fip, nowIso());
+    tx.merchant, null, source, tx.sourceTxnId, tx.sourceTxnId, key, tx.sourceTxnId, tx.fip, nowIso());
   return { created: true, id: info.lastInsertRowid };
 }
 
-function upsertHolding(db, userId, holding) {
+function upsertHolding(db, userId, holding, providerName = 'mock') {
   if (!holding.securityName) return { created: false };
   let secId = db.prepare('SELECT id FROM securities WHERE user_id=? AND LOWER(name)=LOWER(?)').get(userId, holding.securityName)?.id;
   if (!secId) {
     const info = db.prepare(`
       INSERT INTO securities (user_id, ticker, name, exchange, asset_class, currency, price_minor, price_status, provider, is_demo)
-      VALUES (?, ?, ?, NULL, ?, ?, ?, 'MANUAL', 'mock', 1)
-    `).run(userId, holding.ticker || null, holding.securityName, holding.assetClass || 'equity', holding.currency || 'INR', holding.priceMinor || null);
+      VALUES (?, ?, ?, NULL, ?, ?, ?, 'MANUAL', ?, 1)
+    `).run(userId, holding.ticker || null, holding.securityName, holding.assetClass || 'equity', holding.currency || 'INR', holding.priceMinor || null, providerName);
     secId = info.lastInsertRowid;
   }
   const existing = db.prepare('SELECT id FROM holdings WHERE user_id=? AND security_id=? AND quantity=?').get(userId, secId, holding.quantity);
@@ -101,6 +101,16 @@ export async function runAASync(db, userId, { providerName, consentId, customerH
       provider: provider.name, fiTypes, purpose, dataRange, frequency, customerHandle,
     });
     useProviderConsentId = created.consent ? created.consent.consentId : created.consentId;
+    // Documented contract (see header): a consent created implicitly during a
+    // sync is created AND approved — the demo/mock providers complete the
+    // approval step locally; real providers always come through an explicit,
+    // already-approved DB consent (the branch below), never this path.
+    if (provider.approveConsent) {
+      const approved = await provider.approveConsent(useProviderConsentId);
+      if (!approved || (approved.status !== 'approved' && approved.status !== 'active')) {
+        throw aaError(AA_ERROR_CODES.CONSENT_REJECTED, 'Consent could not be approved', { consentId: useProviderConsentId });
+      }
+    }
   } else {
     const st = await provider.getConsentStatus(useProviderConsentId);
     if (!st) throw aaError(AA_ERROR_CODES.CONSENT_NOT_FOUND, 'Consent not found on provider', { consentId: useProviderConsentId });
@@ -127,10 +137,15 @@ export async function runAASync(db, userId, { providerName, consentId, customerH
     : fetched;
   const normalized = normalizeFinancialData(envelope);
 
+  // Synthetic (demo) providers mark every persisted record source='DEMO';
+  // all other providers keep the standard 'aa' provenance. Never changed for
+  // mock/finvu/setu — existing behaviour is preserved.
+  const recordSource = provider.synthetic ? 'DEMO' : 'aa';
+
   const accountByRef = new Map();
   let accountsCreated = 0, accountsUpdated = 0;
   for (const a of normalized.accounts) {
-    const res = upsertAccount(db, userId, { ...a, provider: provider.name });
+    const res = upsertAccount(db, userId, { ...a, provider: provider.name }, recordSource);
     if (res.id) { accountByRef.set(a.external_ref, res.id); if (res.created) accountsCreated++; else accountsUpdated++; }
   }
   for (const a of normalized.accounts) {
@@ -143,18 +158,18 @@ export async function runAASync(db, userId, { providerName, consentId, customerH
   let txCreated = 0, txDuplicates = 0;
   for (const t of normalized.transactions) {
     t.accountId = t.accountId || accountByRef.get(t.accountExternalRef) || null;
-    const res = upsertTransaction(db, userId, t);
+    const res = upsertTransaction(db, userId, t, recordSource);
     if (res.created) txCreated++; else txDuplicates++;
   }
 
   let holdingsCreated = 0, holdingsDuplicates = 0;
   for (const h of normalized.holdings) {
-    const res = upsertHolding(db, userId, h);
+    const res = upsertHolding(db, userId, h, provider.name);
     if (res.created) holdingsCreated++; else holdingsDuplicates++;
   }
 
   const syncedAt = nowIso();
-  db.prepare(`UPDATE accounts SET last_synced_at=? WHERE user_id=? AND source='aa'`).run(syncedAt, userId);
+  db.prepare(`UPDATE accounts SET last_synced_at=? WHERE user_id=? AND source=?`).run(syncedAt, userId, recordSource);
 
   // Record the FI data session for provenance. A provider may reuse a session id
   // across repeated syncs in a sandbox; treat that as idempotent (update, don't

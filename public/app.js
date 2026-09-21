@@ -151,6 +151,27 @@ function donut(parts, size = 130) {
 
 const PALETTE = ['#1d4ed8', '#7c3aed', '#16a34a', '#f59e0b', '#dc2626', '#06b6d4', '#8b5cf6', '#64748b', '#0ea5e9', '#84cc16'];
 
+/* ---------- Data-environment indicator (🧪 DEMO / 🔬 SANDBOX / 🔐 PRODUCTION) ---------- */
+function dataEnvironment() {
+  return (state.config && state.config.dataEnvironment) || null;
+}
+
+// Persistent chip. `light` = rendered on white auth cards.
+function envChipHtml(light = false) {
+  const env = dataEnvironment();
+  if (!env || !env.value) return '';
+  const cls = `env-${String(env.value).toLowerCase()}`;
+  return `<span class="env-chip ${cls}${light ? ' light' : ''}" title="Data environment: ${esc(env.label)}">${esc(env.icon || '')} ${esc(env.label)}</span>`;
+}
+
+// Persistent banner inside the app shell while the DEMO (synthetic) environment
+// is active. Demo data must never be presented as real bank data.
+function envBannerHtml() {
+  const env = dataEnvironment();
+  if (!env || !env.synthetic) return '';
+  return `<div class="env-banner"><span class="env-tag">🧪 DEMO</span><span>DEMO DATA — All financial information shown is synthetic. It is never real bank data.</span></div>`;
+}
+
 /* ---------- Router ---------- */
 const routes = {
   dashboard: { label: 'Dashboard', icon: '\u25A6', fn: viewDashboard },
@@ -186,6 +207,7 @@ function render() {
           <div class="logo">W</div>
           <div><div class="name">WealthCore</div><span class="tag">One Intelligent Core</span></div>
         </div>
+        <div style="margin:2px 0 10px">${envChipHtml()}</div>
         <div class="nav-label">Overview</div>
         ${nav}
         <div class="foot">
@@ -193,7 +215,10 @@ function render() {
           <div class="row"><span class="small">${esc(state.user?.email || '')}</span></div>
         </div>
       </aside>
-      <main class="main" id="view-wrap"></main>
+      <main class="main">
+        ${envBannerHtml()}
+        <div id="view-wrap"></div>
+      </main>
     </div>`;
 
   routes[state.route].fn();
@@ -204,6 +229,7 @@ function renderSetup() {
     <div class="auth-wrap"><div class="auth-card">
       <div class="brand2"><div class="logo">W</div> WealthCore</div>
       <p class="lead">Your Entire Financial Life. One Intelligent Core. Set up your private personal financial operating system.</p>
+      <div style="margin-bottom:12px">${envChipHtml(true)}</div>
       <div id="setup-msg"></div>
       <form id="setup-form">
         <div class="field"><label>Full name</label><input class="input" name="name" required /></div>
@@ -231,6 +257,7 @@ function renderLogin() {
     <div class="auth-wrap"><div class="auth-card">
       <div class="brand2"><div class="logo">W</div> WealthCore</div>
       <p class="lead">Sign in to your private financial operating system.</p>
+      <div style="margin-bottom:12px">${envChipHtml(true)}</div>
       <div id="login-msg"></div>
       <form id="login-form">
         <div class="field"><label>Email</label><input class="input" name="email" type="email" required /></div>
@@ -788,8 +815,8 @@ async function viewIntegrations() {
   const [{ data }, { data: market }, { data: cfgF }, { data: prov }] = await Promise.all([api('/aa/status'), api('/market/status'), api('/config'), api('/aa/providers')]);
   const providers = prov.providers || [];
   // Normalise to uppercase so lowercase modes (e.g. setu's 'sandbox') label correctly.
-  const modeLabel = (m) => { const u = String(m || '').toUpperCase(); return u === 'MOCK' ? 'Demo / Simulation' : u === 'SANDBOX' ? 'Sandbox / UAT' : u === 'PRODUCTION' ? 'Production' : String(m || ''); };
-  const modeChip = (m) => { const u = String(m || '').toUpperCase(); return u === 'MOCK' ? 'purple' : u === 'SANDBOX' ? 'blue' : u === 'PRODUCTION' ? 'green' : 'gray'; };
+  const modeLabel = (m) => { const u = String(m || '').toUpperCase(); return u === 'MOCK' ? 'Demo / Simulation' : u === 'DEMO' ? 'Demo (synthetic)' : u === 'SANDBOX' ? 'Sandbox / UAT' : u === 'PRODUCTION' ? 'Production' : String(m || ''); };
+  const modeChip = (m) => { const u = String(m || '').toUpperCase(); return (u === 'MOCK' || u === 'DEMO') ? 'purple' : u === 'SANDBOX' ? 'blue' : u === 'PRODUCTION' ? 'green' : 'gray'; };
   const soa = ({ integration, status, provider, mode, configured }) => `
     <div class="card"><div class="section-title">Account Aggregator (FIU)</div>
       <div class="kpi"><span class="label">Integration</span><span class="value">${esc(integration)}</span></div>
@@ -1025,6 +1052,10 @@ async function viewNotifications() {
 async function viewSettings() {
   const w = document.getElementById('view-wrap');
   const { data: me } = await api('/auth/me');
+  let demo = null;
+  try { demo = (await api('/demo/status')).data; } catch { demo = null; }
+  const env = dataEnvironment();
+  const c = demo ? demo.counts : null;
   w.innerHTML = `
     <div class="topbar"><div><h1>Settings</h1><div class="sub">Security, privacy, data & demo tools</div></div></div>
     <div class="grid c2">
@@ -1040,6 +1071,21 @@ async function viewSettings() {
           <button class="btn ghost sm" data-action="load-demo">Load sample data</button>
         </div>
       </div>
+      <div class="card demo-actions"><div class="section-title">Demo wealth profile ${env && env.synthetic ? '<span class="chip purple">🧪 DEMO MODE</span>' : ''}</div>
+        <p class="small muted"><b>Synthetic data only.</b> The demo wealth profile is deterministic, clearly-labelled test data (<code>source=DEMO</code>, <code>provider=demo</code>, <code>is_demo=1</code>, ids <code>DEMO-*</code>). It is <b>never real bank data</b> and requires no bank credentials.</p>
+        ${demo ? `
+        <div class="stat"><span>Status</span><b>${demo.loaded ? 'Loaded' : 'Not loaded'}</b></div>
+        <div class="stat"><span>Accounts</span><b>${c.accounts}</b></div>
+        <div class="stat"><span>Transactions</span><b>${c.transactions}</b></div>
+        <div class="stat"><span>Holdings</span><b>${c.holdings}</b></div>
+        <div class="stat"><span>Goals</span><b>${c.goals}</b></div>
+        <div class="stat"><span>Last loaded</span><b>${demo.lastLoadedAt ? esc(String(demo.lastLoadedAt).slice(0, 19).replace('T', ' ')) : '—'}</b></div>
+        <div class="row wrap gap mt">
+          <button class="btn primary sm" data-action="demo-load">Load Demo Wealth Profile</button>
+          <button class="btn ghost sm" data-action="demo-refresh">Refresh Demo Wealth Profile</button>
+          <button class="btn danger sm" data-action="demo-reset">Reset Demo Wealth Profile</button>
+        </div>` : `<div class="alert warn">Demo status unavailable.</div>`}
+      </div>
       <div class="card"><div class="section-title">Privacy</div>
         <p class="small muted">WealthCore stores your data locally (SQLite). No data is written to browser/server logs, telemetry or analytics. Full data export is always available.</p>
         <div class="row wrap gap">
@@ -1048,7 +1094,7 @@ async function viewSettings() {
         </div>
       </div>
       <div class="card"><div class="section-title">About</div>
-        <p class="small muted"><b>WealthCore</b> — Your Entire Financial Life. One Intelligent Core.<br/>Version 1.0 · Private single-user personal financial OS.</p>
+        <p class="small muted"><b>WealthCore</b> — Your Entire Financial Life. One Intelligent Core.<br/>Version 1.6 · Private single-user personal financial OS.</p>
       </div>
     </div>`;
   w.querySelector('[data-action="set-pin"]').addEventListener('click', openPinModal);
@@ -1056,6 +1102,19 @@ async function viewSettings() {
   w.querySelector('[data-action="export-json"]').addEventListener('click', () => download('/export.json', 'wealthcore-export.json'));
   w.querySelector('[data-action="export-csv"]').addEventListener('click', () => download('/export.csv', 'wealthcore-transactions.csv'));
   w.querySelector('[data-action="load-demo"]').addEventListener('click', loadDemo);
+  const demoOp = async (path, okMsg) => {
+    try {
+      const r = (await api(path, { method: 'POST' })).data;
+      toast(okMsg(r), 'success');
+      render();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  w.querySelector('[data-action="demo-load"]')?.addEventListener('click', () => demoOp('/demo/load', (r) => `Demo profile loaded: ${r.summary.accountsCreated} accounts, ${r.summary.transactionsCreated} transactions (synthetic)`));
+  w.querySelector('[data-action="demo-refresh"]')?.addEventListener('click', () => demoOp('/demo/refresh', (r) => `Demo profile refreshed: ${r.summary.transactionsCreated} new, ${r.summary.transactionsDuplicates} already present — no duplicates`));
+  w.querySelector('[data-action="demo-reset"]')?.addEventListener('click', async () => {
+    if (!confirm('Remove the synthetic demo wealth profile? Only demo records (DEMO-*, is_demo=1) for your user are deleted; real data is untouched.')) return;
+    demoOp('/demo/reset', (r) => `Demo profile reset: ${Object.values(r.deleted).reduce((a, b) => a + b, 0)} synthetic records removed`);
+  });
   w.querySelector('[data-action="revoke-conn"]').addEventListener('click', async () => {
     if (!confirm('Revoke all approved/pending connections and detach accounts from providers?')) return;
     try { await api('/privacy/revoke-connections', { method: 'POST', body: {} }); toast('Connections revoked', 'success'); render(); } catch (e) { toast(e.message, 'error'); }

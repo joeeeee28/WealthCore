@@ -14,6 +14,8 @@ Documentation is part of the product. This is the single source of truth for wha
 - `DATA_MODEL.md` — entities, fields, relationships, indexes
 - `API_SPECIFICATION.md` — REST endpoints, request/response, errors
 - `SYNC_ENGINE.md` — synchronisation behaviour
+- `DATA_ENVIRONMENTS.md` — central `WEALTHCORE_DATA_ENVIRONMENT` (DEMO/FINVU_SANDBOX/SETU_SANDBOX/PRODUCTION), provider resolution, production safety
+- `DEMO_DATA.md` — demo data environment: deterministic synthetic fixtures, demo provider, load/refresh/reset, isolation & idempotency
 - `AA_INTEGRATION.md` — Account Aggregator / FIU integration & consent lifecycle
 - `SETU_INTEGRATION.md` — Setu AA gateway adapter, current official auth contract, webhook contract & external-sandbox result
 - `SETU_GITHUB_ACTIONS.md` — running the real Setu sandbox E2E on a GitHub-hosted runner (secrets, trigger, callback + human-approval requirements)
