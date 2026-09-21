@@ -19,6 +19,23 @@ function num(v, def) {
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
+// Central data environment. WEALTHCORE_DATA_ENVIRONMENT selects which data
+// provider family the application resolves by default. DEMO is the default so
+// the product is always explorable with clearly-labelled synthetic data.
+// PRODUCTION must NEVER fall back to DEMO automatically or silently.
+export const DATA_ENVIRONMENTS = Object.freeze(['DEMO', 'FINVU_SANDBOX', 'SETU_SANDBOX', 'PRODUCTION']);
+export const DEFAULT_DATA_ENVIRONMENT = 'DEMO';
+
+/** Normalize the raw WEALTHCORE_DATA_ENVIRONMENT value (never throws). */
+export function parseDataEnvironment(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { value: DEFAULT_DATA_ENVIRONMENT, valid: true, raw: null };
+  }
+  const value = String(raw).trim().toUpperCase();
+  if (DATA_ENVIRONMENTS.includes(value)) return { value, valid: true, raw };
+  return { value: null, valid: false, raw };
+}
+
 // Read a Setu config value, preferring the canonical WEALTHCORE_SETU_* namespace
 // then the short SETU_* alias. Never returns the secret value in logs.
 function setuVal(canonical, alias, def = null) {
@@ -103,6 +120,18 @@ function computeConfig() {
 
     // AA environment mode (mock | sandbox | production).
     aaEnvironment: process.env.AA_ENVIRONMENT || process.env.WEALTHCORE_AA_ENVIRONMENT || 'development',
+
+    // Central data environment: DEMO (default) | FINVU_SANDBOX | SETU_SANDBOX |
+    // PRODUCTION. Invalid values are flagged and rejected by validateConfig —
+    // resolution code must consult `dataEnvironment` only when it is valid.
+    ...(() => {
+      const parsed = parseDataEnvironment(process.env.WEALTHCORE_DATA_ENVIRONMENT);
+      return {
+        dataEnvironment: parsed.value,
+        dataEnvironmentValid: parsed.valid,
+        dataEnvironmentRaw: parsed.raw,
+      };
+    })(),
 
     // Market data
     market: {
@@ -220,7 +249,27 @@ export function validateConfig(cfg = config()) {
     }
   }
 
+  // Central data environment validation. An unrecognised value is a hard
+  // configuration error — failing validation is the ONLY response, never a
+  // guess or a default substitution after the operator made an explicit choice.
+  if (cfg.dataEnvironmentValid === false) {
+    errors.push(`WEALTHCORE_DATA_ENVIRONMENT must be one of ${DATA_ENVIRONMENTS.join(', ')} (received an unrecognised value).`);
+  }
+
+  // PRODUCTION data environment: NEVER fall back to demo — automatically or
+  // silently. Production requires explicit, configured real-provider
+  // credentials (Setu or generic AA/FIU); otherwise startup validation fails.
+  if (cfg.dataEnvironment === 'PRODUCTION') {
+    const prodProvider = String(cfg.aa.provider || '').toLowerCase();
+    if (prodProvider === 'demo' || prodProvider === 'mock') {
+      errors.push('AA_PROVIDER must not be the demo/mock provider when WEALTHCORE_DATA_ENVIRONMENT=PRODUCTION.');
+    }
+    if (!cfg.aa.configured && !(cfg.setu && cfg.setu.configured)) {
+      errors.push('WEALTHCORE_DATA_ENVIRONMENT=PRODUCTION requires configured Finvu (AA) or Setu credentials — production never falls back to the demo environment.');
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
-export default { config, validateConfig, validateSetuConfig, resetConfig };
+export default { config, validateConfig, validateSetuConfig, resetConfig, DATA_ENVIRONMENTS, DEFAULT_DATA_ENVIRONMENT, parseDataEnvironment };

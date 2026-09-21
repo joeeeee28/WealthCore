@@ -13,6 +13,8 @@ import { computeNetWorth, recordSnapshot, getHoldingsValuation } from '../lib/ne
 import { computePortfolio } from '../lib/portfolio.js';
 import { aaIntegrationStatus, createConsent, approveConsent, rejectConsent, revokeConsent, expireConsents, requestFinancialData } from '../lib/aa-integration.js';
 import { listAAPProviders, resolveAAPProvider, normalizeFinancialData, runAASync, AA_ERROR_CODES, toAAError, consentStateFlow, dataStateFlow, getAAPProvider } from '../aa/index.js';
+import { getDataEnvironment, describeDataEnvironment, describeDataEnvironments } from '../aa/data-environment.js';
+import { demoStatus, loadDemoProfile, refreshDemoProfile, resetDemoProfile } from '../lib/demo.js';
 import { refreshPrices, priceFreshness, marketProviderConfig } from '../lib/market-data.js';
 import { dedupKey, validateTransaction, detectTransfer, categorize, detectRecurring } from '../lib/transaction-intelligence.js';
 import * as calc from '../lib/calculations.js';
@@ -108,6 +110,19 @@ function sanitizeAccount(a) {
   };
 }
 
+// Active data-environment descriptor for clients (never leaks credentials).
+function activeDataEnvironmentDescriptor() {
+  try {
+    const d = describeDataEnvironment(getDataEnvironment());
+    return {
+      ...d,
+      notice: d.synthetic ? 'DEMO DATA — All financial information shown is synthetic.' : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---- Public / config ----
 router.get('/config', (_req, res) => {
   const user = db.prepare('SELECT id FROM users LIMIT 1').get();
@@ -120,8 +135,28 @@ router.get('/config', (_req, res) => {
     market: marketProviderConfig(),
     llm: { provider: llmCfg.provider || null, configured: llmCfg.configured, mode: llmCfg.configured ? 'PRODUCTION' : 'DEVELOPMENT' },
     scheduler: config().scheduler.enabled,
+    dataEnvironment: activeDataEnvironmentDescriptor(),
     version: 1,
   });
+});
+
+// ---- Data environment (public: labels/flags only — no secrets, no data) ----
+router.get('/data-environment', (_req, res) => {
+  const env = activeDataEnvironmentDescriptor();
+  if (!env) {
+    return err(res, 500, 'INVALID_DATA_ENVIRONMENT', 'WEALTHCORE_DATA_ENVIRONMENT is invalid. Fix configuration and restart.');
+  }
+  res.json(env);
+});
+
+router.get('/data-environments', (_req, res) => {
+  let environments;
+  try {
+    environments = describeDataEnvironments();
+  } catch {
+    return err(res, 500, 'INVALID_DATA_ENVIRONMENT', 'WEALTHCORE_DATA_ENVIRONMENT is invalid. Fix configuration and restart.');
+  }
+  res.json({ environments, active: environments.find((e) => e.active)?.value || null });
 });
 
 // ---- Auth ----
@@ -958,12 +993,50 @@ router.post('/calculators/xirr', (req, res) => {
   } catch (e) { return err(res, 400, 'INVALID_INPUT', e.message); }
 });
 
-// ---- Demo data ----
+// ---- Demo data (legacy sample seeder — unrelated to the data environments) ----
 router.post('/seed-demo', requireUnlocked, (req, res) => {
   ensureDefaultCategories(db, req.user.id);
   const { accountCount, holdingCount } = seedDemoData(db, req.user.id);
   audit(req.user.id, 'demo.seed', '');
   res.json({ ok: true, accountCount, holdingCount, message: 'Clearly-labelled sample data (MANUAL/SANDBOX) loaded.' });
+});
+
+// ---- Demo data environment (synthetic demo wealth profile) ----
+// All records written by these endpoints are synthetic: source='DEMO',
+// provider='demo', is_demo=1, DEMO-* ids. They are blocked entirely when
+// WEALTHCORE_DATA_ENVIRONMENT=PRODUCTION (production never falls back to demo).
+router.get('/demo/status', requireUnlocked, (req, res) => {
+  res.json(demoStatus(db, req.user.id));
+});
+
+router.post('/demo/load', requireUnlocked, async (req, res) => {
+  try {
+    const result = await loadDemoProfile(db, req.user.id, { reason: 'load' });
+    audit(req.user.id, 'demo.load', '');
+    res.json(result);
+  } catch (e) {
+    return err(res, e.code === 'DEMO_DISABLED_IN_PRODUCTION' ? 403 : 400, e.code || 'DEMO_ERROR', e.message);
+  }
+});
+
+router.post('/demo/refresh', requireUnlocked, async (req, res) => {
+  try {
+    const result = await refreshDemoProfile(db, req.user.id);
+    audit(req.user.id, 'demo.refresh', '');
+    res.json(result);
+  } catch (e) {
+    return err(res, e.code === 'DEMO_DISABLED_IN_PRODUCTION' ? 403 : 400, e.code || 'DEMO_ERROR', e.message);
+  }
+});
+
+router.post('/demo/reset', requireUnlocked, (req, res) => {
+  try {
+    const result = resetDemoProfile(db, req.user.id);
+    audit(req.user.id, 'demo.reset', '');
+    res.json(result);
+  } catch (e) {
+    return err(res, e.code === 'DEMO_DISABLED_IN_PRODUCTION' ? 403 : 400, e.code || 'DEMO_ERROR', e.message);
+  }
 });
 
 // ---- Import / Export ----

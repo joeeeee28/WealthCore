@@ -8,9 +8,15 @@ import { registerAAPProvider, getAAPProvider, listAAPProviders, resolveAAPProvid
 import MockAAProvider from './providers/mock.js';
 import FinvuProvider from './providers/finvu.js';
 import SetuProvider from './providers/setu.js';
+import DemoProvider from './providers/demo.js';
 import { aaError, AAError, AA_ERROR_CODES, toAAError } from './errors.js';
 import { normalizeFinancialData, capabilityError } from './rebit-normalizer.js';
 import { runAASync } from './sync.js';
+import {
+  DATA_ENVIRONMENTS, DEFAULT_DATA_ENVIRONMENT, ENVIRONMENT_PROVIDER,
+  getDataEnvironment, getActiveProvider, environmentProviderName,
+  describeDataEnvironment, describeDataEnvironments, assertDemoAllowed,
+} from './data-environment.js';
 import {
   CONSENT_STATES, DATA_STATES, consentStateFlow, dataStateFlow,
   canTransitionConsent, canTransitionData, transitionConsentStatus, transitionDataStatus,
@@ -42,6 +48,7 @@ function notConfiguredProvider(name, detail) {
 registerAAPProvider(MockAAProvider);
 registerAAPProvider(FinvuProvider);
 registerAAPProvider(SetuProvider);
+registerAAPProvider(DemoProvider);
 registerAAPProvider(notConfiguredProvider('onemoney', 'OneMoney credentials required. developer.onemoney.in'));
 registerAAPProvider(notConfiguredProvider('anumati', 'Anumati/Perfios credentials required.'));
 registerAAPProvider(notConfiguredProvider('ink', 'INK AA credentials required.'));
@@ -52,19 +59,23 @@ registerAAPProvider(notConfiguredProvider('protean', 'Protean SurakshAA credenti
 
 export {
   registerAAPProvider, getAAPProvider, listAAPProviders, resolveAAPProvider,
-  MockAAProvider, FinvuProvider, SetuProvider,
+  MockAAProvider, FinvuProvider, SetuProvider, DemoProvider,
   aaError, AAError, AA_ERROR_CODES, toAAError,
   normalizeFinancialData, capabilityError,
   runAASync,
   CONSENT_STATES, DATA_STATES, consentStateFlow, dataStateFlow,
   canTransitionConsent, canTransitionData, transitionConsentStatus, transitionDataStatus,
+  DATA_ENVIRONMENTS, DEFAULT_DATA_ENVIRONMENT, ENVIRONMENT_PROVIDER,
+  getDataEnvironment, getActiveProvider, environmentProviderName,
+  describeDataEnvironment, describeDataEnvironments, assertDemoAllowed,
 };
 
 export default {
   registerAAPProvider, getAAPProvider, listAAPProviders, resolveAAPProvider,
-  MockAAProvider, FinvuProvider, SetuProvider,
+  MockAAProvider, FinvuProvider, SetuProvider, DemoProvider,
   aaError, AAError, AA_ERROR_CODES, toAAError,
   normalizeFinancialData, capabilityError,
   runAASync,
   CONSENT_STATES, DATA_STATES,
+  getDataEnvironment, getActiveProvider, describeDataEnvironments, assertDemoAllowed,
 };

@@ -249,3 +249,23 @@ tr:hover td { background: var(--surface-2); }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* ---- Data-environment indicator (🧪 DEMO / 🔬 SANDBOX / 🔐 PRODUCTION) ---- */
+.env-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.env-chip.env-demo { background: rgba(124,58,237,.18); color: #d8b4fe; border: 1px solid rgba(124,58,237,.45); }
+.env-chip.env-finvu_sandbox, .env-chip.env-setu_sandbox { background: rgba(59,130,246,.16); color: #93c5fd; border: 1px solid rgba(59,130,246,.45); }
+.env-chip.env-production { background: rgba(22,163,74,.16); color: #86efac; border: 1px solid rgba(22,163,74,.45); }
+.env-chip.env-unknown { background: var(--surface-3); color: var(--muted); border: 1px solid var(--border); }
+
+/* Persistent banner shown on every view while the synthetic demo environment
+   is active. Demo data is never presented as real bank data. */
+.env-banner { background: repeating-linear-gradient(45deg, #fffbeb, #fffbeb 12px, #fef3c7 12px, #fef3c7 24px); color: #92400e; border: 1px solid #fde68a; border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12.5px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.env-banner .env-tag { background: var(--purple); color: #fff; border-radius: 99px; padding: 2px 8px; font-size: 11px; letter-spacing: .05em; }
+
+/* On light auth cards the chip needs light-surface contrast. */
+.env-chip.light.env-demo { background: #f5f3ff; color: var(--purple); border-color: #ddd6fe; }
+.env-chip.light.env-finvu_sandbox, .env-chip.light.env-setu_sandbox { background: #eff6ff; color: var(--royal-2); border-color: #bfdbfe; }
+.env-chip.light.env-production { background: var(--green-bg); color: var(--green); border-color: #bbf7d0; }
+
+.demo-actions .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--surface-3); }
+.demo-actions .stat:last-child { border-bottom: none; }
